@@ -36,6 +36,9 @@
 ## 快速开始
 
 ```bash
+git clone git@github.com:whao1996/redis-studio.git
+cd redis-studio
+
 # 安装前端依赖（首次运行）
 cd frontend && npm install && cd ..
 
