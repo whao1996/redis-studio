@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/redis.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <link rel="stylesheet" href="/style.css" />
+    <title>Redis Studio</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // 必须先于 Wails 运行时注册：拖拽区域会在捕获阶段吞掉第二次 mousedown。
+      (function () {
+        var lastTime = 0;
+        var lastX = 0;
+        var lastY = 0;
+        window.addEventListener(
+          "mousedown",
+          function (event) {
+            if (event.button !== 0) {
+              lastTime = 0;
+              return;
+            }
+            var now = Date.now();
+            var closeInTime = now - lastTime <= 450;
+            var closeInSpace =
+              Math.abs(event.clientX - lastX) <= 8 &&
+              Math.abs(event.clientY - lastY) <= 8;
+            if (event.detail >= 2 || (closeInTime && closeInSpace)) {
+              lastTime = 0;
+              window.dispatchEvent(
+                new CustomEvent("wails-titlebar-dblclick", {
+                  detail: { target: event.target },
+                })
+              );
+            } else {
+              lastTime = now;
+              lastX = event.clientX;
+              lastY = event.clientY;
+            }
+          },
+          true
+        );
+      })();
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
