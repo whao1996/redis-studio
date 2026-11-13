@@ -11,12 +11,23 @@ interface Props {
   onEdit: (payload: EditPayload) => Promise<boolean>;
 }
 
-type RowActionKind = "edit" | "delete" | "confirm" | "cancel";
+type RowActionKind = "copy" | "copied" | "edit" | "delete" | "confirm" | "cancel";
 
 function RowActionButton({ kind, title, onClick }: { kind: RowActionKind; title: string; onClick: () => void }) {
   let icon: ReactNode;
 
   switch (kind) {
+    case "copy":
+      icon = (
+        <>
+          <rect x="9" y="9" width="11" height="11" rx="2" />
+          <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+        </>
+      );
+      break;
+    case "copied":
+      icon = <path d="m5 13 4 4L19 7" />;
+      break;
     case "edit":
       icon = (
         <>
@@ -58,6 +69,7 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
   const [newB, setNewB] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copiedRow, setCopiedRow] = useState<string | null>(null);
 
   useEffect(() => {
     setEditing(null);
@@ -65,6 +77,7 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
     setNewA("");
     setNewB("");
     setError(null);
+    setCopiedRow(null);
   }, [type]);
 
   const [columnA, columnB] = entryHeaders(type, t);
@@ -89,6 +102,23 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
   const [firstLabel, secondLabel, addLabel] = addLabels();
 
   const rowId = (entry: Entry) => (type === "set" ? entry.value : entry.field);
+
+  const copyRowValue = async (id: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = value;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+    setCopiedRow(id);
+    window.setTimeout(() => setCopiedRow((current) => (current === id ? null : current)), 1500);
+  };
 
   const saveRow = async (entry: Entry) => {
     if (!editing) return;
@@ -267,6 +297,11 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
                   </>
                 ) : (
                   <>
+                    <RowActionButton
+                      kind={copiedRow === id ? "copied" : "copy"}
+                      title={copiedRow === id ? t("copied") : t("copy")}
+                      onClick={() => void copyRowValue(id, entry.value)}
+                    />
                     {editable && (
                       <RowActionButton
                         kind="edit"

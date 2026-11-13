@@ -81,9 +81,11 @@ function ConnectionItem({
           }}
         >
           {conn.connected ? (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-              <path d="M12 3v9" />
-              <path d="M6.34 6.34a8 8 0 1 0 11.32 0" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M9 17H7A5 5 0 0 1 7 7h1" />
+              <path d="M15 7h2a5 5 0 1 1 0 10h-1" />
+              <path d="M8 12h4" />
+              <path d="m2 2 20 20" />
             </svg>
           ) : (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

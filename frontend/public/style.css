@@ -1323,11 +1323,11 @@ body.is-resizing-panes * {
 /* ---------- Inline editing ---------- */
 
 .entry-table.with-actions .entry-row {
-  grid-template-columns: 130px minmax(0, 1fr) 52px;
+  grid-template-columns: 130px minmax(0, 1fr) 70px;
 }
 
 .entry-table.with-actions.set .entry-row {
-  grid-template-columns: minmax(0, 1fr) 52px;
+  grid-template-columns: minmax(0, 1fr) 70px;
 }
 
 .cell-input {
@@ -1348,8 +1348,8 @@ body.is-resizing-panes * {
 }
 
 .entry-value.editable:hover {
-  color: #fff;
-  text-decoration: underline dotted rgba(255, 255, 255, 0.28);
+  color: var(--text);
+  text-decoration: underline dotted var(--border-strong);
   text-underline-offset: 3px;
 }
 
@@ -1381,6 +1381,10 @@ body.is-resizing-panes * {
 .row-btn.delete:hover,
 .row-btn.confirm {
   color: #ff9498;
+}
+
+.row-btn.copied {
+  color: var(--green);
 }
 
 .row-btn.confirm:hover {
