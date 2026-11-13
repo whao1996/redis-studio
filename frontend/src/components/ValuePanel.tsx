@@ -1,10 +1,12 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { entryHeaders } from "../entryHeaders";
 import { formatBytes, formatTTL, isJSONType, isModuleType, typeLabel } from "../format";
 import type { TranslationKey } from "../i18n";
 import { useSettings } from "../settings";
 import type { EditPayload, ValueResult } from "../types";
 import EntryEditor from "./EntryEditor";
+import { JsonPreviewModal, JsonTreeView, prettyJson } from "./JsonPreview";
+import JsonSourceEditor from "./JsonSourceEditor";
 import ModuleTools from "./ModuleTools";
 
 const MODULE_TITLES: Record<string, TranslationKey> = {
@@ -41,48 +43,6 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-function highlightJSON(text: string): ReactNode {
-  // 超大文档不做高亮，避免生成过多节点。
-  if (text.length > 120_000) return text;
-
-  const tokens: ReactNode[] = [];
-  const pattern = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
-  let last = 0;
-  let index = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > last) {
-      tokens.push(text.slice(last, match.index));
-    }
-
-    if (match[1] !== undefined) {
-      tokens.push(
-        <span key={index++} className={match[2] ? "json-key" : "json-string"}>
-          {match[1]}
-        </span>
-      );
-      if (match[2]) tokens.push(match[2]);
-    } else if (match[3] !== undefined) {
-      tokens.push(
-        <span key={index++} className="json-literal">
-          {match[3]}
-        </span>
-      );
-    } else {
-      tokens.push(
-        <span key={index++} className="json-number">
-          {match[0]}
-        </span>
-      );
-    }
-
-    last = pattern.lastIndex;
-  }
-
-  tokens.push(text.slice(last));
-  return tokens;
-}
 
 export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL, onDelete, onRefresh }: Props) {
   const { t } = useSettings();
@@ -101,6 +61,7 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
   const [ttlDraft, setTTLDraft] = useState("");
   const [ttlBusy, setTTLBusy] = useState(false);
   const [ttlError, setTTLError] = useState<string | null>(null);
+  const [jsonPreview, setJsonPreview] = useState<string | null>(null);
 
   useEffect(() => {
     setDraft(value?.value ?? "");
@@ -116,7 +77,13 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
     setTTLDraft(value && value.ttl > 0 ? String(value.ttl) : "");
     setTTLBusy(false);
     setTTLError(null);
+    setJsonPreview(null);
   }, [value]);
+
+  const draftJson = useMemo(
+    () => (value?.type === "string" ? prettyJson(draft) : null),
+    [value?.type, draft]
+  );
 
   if (loading) {
     return (
@@ -285,6 +252,11 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
           ) : (
             !isString && !isModule && <span className="meta">{t("itemsCount", { count: value.length })}</span>
           )}
+          {isString && draftJson && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setJsonPreview(draft)}>
+              {t("jsonPreview")}
+            </button>
+          )}
           {(isJSON || isString) && (
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyValue()}>
               {copied ? t("copied") : t("copy")}
@@ -408,12 +380,10 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
       ) : isJSON ? (
         jsonEditing ? (
           <div className="value-body string-body">
-            <textarea
-              className="value-editor"
+            <JsonSourceEditor
               value={draft}
-              spellCheck={false}
-              onChange={(event) => {
-                setDraft(event.target.value);
+              onChange={(value) => {
+                setDraft(value);
                 setJSONError(null);
               }}
             />
@@ -435,7 +405,7 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
           </div>
         ) : (
           <div className="value-body json-body">
-            <pre className="json-view">{highlightJSON(draft)}</pre>
+            <JsonTreeView text={draft} className="json-view" />
             <div className="json-foot">
               <span className="muted">
                 {t("chars", { count: draft.length })} · {t("previewOnly")}
@@ -503,6 +473,14 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
         <div className="value-body">
           <p className="notice">{value.value || t("noContent")}</p>
         </div>
+      )}
+
+      {jsonPreview && (
+        <JsonPreviewModal
+          title={value.key}
+          content={jsonPreview}
+          onClose={() => setJsonPreview(null)}
+        />
       )}
     </aside>
   );

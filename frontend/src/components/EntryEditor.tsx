@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { entryHeaders } from "../entryHeaders";
 import { useSettings } from "../settings";
 import type { EditPayload, Entry } from "../types";
+import { JsonPreviewModal, prettyJson } from "./JsonPreview";
 
 interface Props {
   type: string;
@@ -11,12 +12,20 @@ interface Props {
   onEdit: (payload: EditPayload) => Promise<boolean>;
 }
 
-type RowActionKind = "copy" | "copied" | "edit" | "delete" | "confirm" | "cancel";
+type RowActionKind = "json" | "copy" | "copied" | "edit" | "delete" | "confirm" | "cancel";
 
 function RowActionButton({ kind, title, onClick }: { kind: RowActionKind; title: string; onClick: () => void }) {
   let icon: ReactNode;
 
   switch (kind) {
+    case "json":
+      icon = (
+        <>
+          <path d="M8 3H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1" />
+          <path d="M16 3h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1" />
+        </>
+      );
+      break;
     case "copy":
       icon = (
         <>
@@ -70,6 +79,7 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedRow, setCopiedRow] = useState<string | null>(null);
+  const [jsonPreview, setJsonPreview] = useState<{ title: string; content: string } | null>(null);
 
   useEffect(() => {
     setEditing(null);
@@ -78,6 +88,7 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
     setNewB("");
     setError(null);
     setCopiedRow(null);
+    setJsonPreview(null);
   }, [type]);
 
   const [columnA, columnB] = entryHeaders(type, t);
@@ -251,6 +262,7 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
           const id = rowId(entry);
           const isEditing = editing?.row === id;
           const isConfirming = confirming === id;
+          const jsonValue = prettyJson(entry.value);
 
           return (
             <div className="entry-row" key={id}>
@@ -297,6 +309,13 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
                   </>
                 ) : (
                   <>
+                    {jsonValue && (
+                      <RowActionButton
+                        kind="json"
+                        title={t("jsonPreview")}
+                        onClick={() => setJsonPreview({ title: entry.field || columnA, content: entry.value })}
+                      />
+                    )}
                     <RowActionButton
                       kind={copiedRow === id ? "copied" : "copy"}
                       title={copiedRow === id ? t("copied") : t("copy")}
@@ -369,6 +388,14 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
       </div>
 
       {error && <p className="notice err">{error}</p>}
+
+      {jsonPreview && (
+        <JsonPreviewModal
+          title={jsonPreview.title}
+          content={jsonPreview.content}
+          onClose={() => setJsonPreview(null)}
+        />
+      )}
     </>
   );
 }
