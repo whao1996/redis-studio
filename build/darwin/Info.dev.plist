@@ -5,7 +5,7 @@
 		<key>CFBundleExecutable</key>
 		<string>redis-studio</string>
 		<key>CFBundleGetInfoString</key>
-		<string>Redis GUI client</string>
+		<string>Lightweight cross-platform Redis GUI for browsing, editing and diagnostics</string>
 		<key>CFBundleIconFile</key>
 		<string>icons</string>
 		<key>CFBundleIconName</key>

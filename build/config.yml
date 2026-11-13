@@ -8,7 +8,7 @@ info:
   companyName: "Redis Studio" # The name of the company
   productName: "Redis Studio" # The name of the application
   productIdentifier: "com.redisstudio.app" # The unique product identifier
-  description: "A lightweight Redis GUI client built with Wails" # The application description
+  description: "Lightweight cross-platform Redis GUI for browsing, editing and diagnostics" # The application description
   copyright: "(c) 2026, Redis Studio" # Copyright text
   comments: "Redis GUI client" # Comments
   version: "1.0.1" # The application version

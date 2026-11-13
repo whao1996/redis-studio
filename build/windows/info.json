@@ -8,7 +8,7 @@
 			"FileVersion": "1.0.1",
 			"ProductVersion": "1.0.1",
 			"CompanyName": "Redis Studio",
-			"FileDescription": "A lightweight Redis GUI client built with Wails",
+			"FileDescription": "Lightweight cross-platform Redis GUI for browsing, editing and diagnostics",
 			"LegalCopyright": "(c) 2026, Redis Studio",
 			"ProductName": "Redis Studio",
 			"Comments": "Redis GUI client"

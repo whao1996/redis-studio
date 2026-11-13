@@ -2,6 +2,8 @@
 
 轻量的跨平台 Redis 图形客户端，支持 macOS 与 Windows。客户端使用 React + TypeScript，后端使用 Go，通过 Wails v3 打包为原生桌面应用。
 
+当前版本：`1.0.1` · [更新日志](CHANGELOG.md)
+
 ## 功能
 
 | 模块 | 能力 |
