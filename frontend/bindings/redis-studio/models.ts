@@ -162,7 +162,6 @@ export interface KeyAnalysis {
     "namespaces": NamespaceSummary[] | null;
     "topByMemory": KeyAnalysisItem[] | null;
     "topByLength": KeyAnalysisItem[] | null;
-    "truncated": boolean;
 }
 
 export interface KeyAnalysisItem {
@@ -181,6 +180,11 @@ export interface KeyInfo {
      * 秒；-1 表示永不过期，-2 表示键不存在
      */
     "ttl": number;
+
+    /**
+     * MEMORY USAGE，字节
+     */
+    "size": number;
 }
 
 export interface NamespaceSummary {

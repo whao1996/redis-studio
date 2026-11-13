@@ -243,11 +243,6 @@ export default function AnalysisPage({ id, db }: Props) {
           <section className="status-panel analysis-panel">
             <div className="analysis-head">
               <h3>{t("analysisSummary")}</h3>
-              {analysis?.truncated && (
-                <span className="analysis-warn">
-                  {t("analysisTruncated", { count: num(analysis.totalKeys) })}
-                </span>
-              )}
             </div>
 
             <div className="donut-grid">

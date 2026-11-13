@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { formatTTL, typeLabel } from "../format";
+import { formatBytes, formatTTL, typeLabel } from "../format";
 import { buildKeyTree, collectFolderPaths, keyLeafLabel, type KeyFolder } from "../keyTree";
 import { useSettings } from "../settings";
 import type { KeyInfo } from "../types";
+
+const FOLDER_RENDER_STEP = 200;
 
 interface Props {
   keys: KeyInfo[];
@@ -14,6 +16,7 @@ interface Props {
   autoExpand: boolean;
   onSelect: (key: string) => void;
   onLoadMore: () => void;
+  onLoadAll: () => void;
   onRefresh: () => void;
   onContentWidth: (width: number) => void;
 }
@@ -25,10 +28,25 @@ interface FolderRowProps {
   onToggle: (path: string) => void;
   selectedKey: string | null;
   onSelect: (key: string) => void;
+  limits: Record<string, number>;
+  onShowMore: (path: string) => void;
 }
 
-function FolderRow({ folder, depth, expanded, onToggle, selectedKey, onSelect }: FolderRowProps) {
+function FolderRow({
+  folder,
+  depth,
+  expanded,
+  onToggle,
+  selectedKey,
+  onSelect,
+  limits,
+  onShowMore,
+}: FolderRowProps) {
+  const { t } = useSettings();
   const open = expanded.has(folder.path);
+  const limit = limits[folder.path] ?? FOLDER_RENDER_STEP;
+  const visibleKeys = folder.keys.slice(0, limit);
+  const remaining = folder.keys.length - visibleKeys.length;
 
   return (
     <>
@@ -63,9 +81,11 @@ function FolderRow({ folder, depth, expanded, onToggle, selectedKey, onSelect }:
               onToggle={onToggle}
               selectedKey={selectedKey}
               onSelect={onSelect}
+              limits={limits}
+              onShowMore={onShowMore}
             />
           ))}
-          {folder.keys.map((item) => (
+          {visibleKeys.map((item) => (
             <LeafRow
               key={item.key}
               item={item}
@@ -74,6 +94,16 @@ function FolderRow({ folder, depth, expanded, onToggle, selectedKey, onSelect }:
               onSelect={onSelect}
             />
           ))}
+          {remaining > 0 && (
+            <button
+              type="button"
+              className="tree-more-row"
+              style={{ paddingLeft: 18 + (depth + 1) * 16 }}
+              onClick={() => onShowMore(folder.path)}
+            >
+              {t("showMoreKeys", { count: remaining })}
+            </button>
+          )}
         </>
       )}
     </>
@@ -91,21 +121,27 @@ function LeafRow({ item, depth, selectedKey, onSelect }: LeafRowProps) {
   const { t } = useSettings();
 
   return (
-    <button
-      type="button"
+    <div
       className={"tree-row tree-leaf" + (selectedKey === item.key ? " selected" : "")}
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(item.key)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect(item.key);
+        }
+      }}
       title={item.key}
     >
       <span className="tree-label" style={{ paddingLeft: depth * 16 }}>
         <span className="caret-spacer" />
+        <span className={`type-badge type-${item.type}`}>{typeLabel(item.type)}</span>
         <span className="tree-name">{keyLeafLabel(item.key)}</span>
       </span>
-      <span>
-        <span className={`type-badge type-${item.type}`}>{typeLabel(item.type)}</span>
-      </span>
       <span className="key-ttl">{formatTTL(item.ttl, t)}</span>
-    </button>
+      <span className="key-size">{formatBytes(item.size)}</span>
+    </div>
   );
 }
 
@@ -119,6 +155,7 @@ export default function KeyBrowser({
   autoExpand,
   onSelect,
   onLoadMore,
+  onLoadAll,
   onRefresh,
   onContentWidth,
 }: Props) {
@@ -126,15 +163,31 @@ export default function KeyBrowser({
   const tree = useMemo(() => buildKeyTree(keys), [keys]);
   const folderPaths = useMemo(() => collectFolderPaths(tree), [tree]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [folderLimits, setFolderLimits] = useState<Record<string, number>>({});
+  const rootLimit = folderLimits[""] ?? FOLDER_RENDER_STEP;
+  const rootKeys = tree.keys.slice(0, rootLimit);
+  const rootRemaining = tree.keys.length - rootKeys.length;
   const tableRef = useRef<HTMLDivElement>(null);
+
+  const showMore = (path: string) => {
+    setFolderLimits((prev) => ({
+      ...prev,
+      [path]: (prev[path] ?? FOLDER_RENDER_STEP) + FOLDER_RENDER_STEP,
+    }));
+  };
 
   useEffect(() => {
     setExpanded(new Set());
+    setFolderLimits({});
   }, [treeScope]);
 
   useEffect(() => {
     if (!autoExpand || folderPaths.length === 0) return;
-    setExpanded(new Set(folderPaths));
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const path of folderPaths) next.add(path);
+      return next;
+    });
   }, [autoExpand, folderPaths]);
 
   const allExpanded = folderPaths.length > 0 && folderPaths.every((path) => expanded.has(path));
@@ -193,9 +246,10 @@ export default function KeyBrowser({
     const gap = parseFloat(rowStyle.columnGap) || 0;
     const padding =
       (parseFloat(rowStyle.paddingLeft) || 0) + (parseFloat(rowStyle.paddingRight) || 0);
-    const typeWidth = head.children[1].getBoundingClientRect().width;
-    const ttlWidth = head.children[2].getBoundingClientRect().width;
-    const required = Math.ceil(labelWidth + typeWidth + ttlWidth + gap * 2 + padding + 10);
+    const fixedWidth =
+      head.children[1].getBoundingClientRect().width +
+      head.children[2].getBoundingClientRect().width;
+    const required = Math.ceil(labelWidth + fixedWidth + gap * 2 + padding + 24);
     onContentWidth(required);
   }, [tree, expanded, fontSize, onContentWidth]);
 
@@ -219,8 +273,8 @@ export default function KeyBrowser({
       <div className="key-table" ref={tableRef}>
         <div className="key-row key-head">
           <span>{t("keyColumn")}</span>
-          <span>{t("typeColumn")}</span>
-          <span>{t("ttlColumn")}</span>
+          <span className="key-ttl-head">{t("ttlColumn")}</span>
+          <span className="key-size-head">{t("sizeColumn")}</span>
         </div>
 
         {!hasConnection && (
@@ -255,6 +309,8 @@ export default function KeyBrowser({
             onToggle={toggle}
             selectedKey={selectedKey}
             onSelect={onSelect}
+            limits={folderLimits}
+            onShowMore={showMore}
           />
         ))}
 
@@ -268,6 +324,12 @@ export default function KeyBrowser({
           />
         ))}
 
+        {rootRemaining > 0 && (
+          <button type="button" className="tree-more-row" style={{ paddingLeft: 18 }} onClick={() => showMore("")}>
+            {t("showMoreKeys", { count: rootRemaining })}
+          </button>
+        )}
+
         {loading && (
           <div className="key-loading">
             <span className="spinner" />
@@ -279,9 +341,14 @@ export default function KeyBrowser({
       <div className="panel-foot">
         <span className="muted">{t("loadedKeys", { count: keys.length })}</span>
         {hasMore ? (
-          <button type="button" className="btn btn-ghost" onClick={onLoadMore} disabled={loading}>
-            {t("loadMore")}
-          </button>
+          <>
+            <button type="button" className="btn btn-ghost" onClick={onLoadMore} disabled={loading}>
+              {t("loadMore")}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={onLoadAll} disabled={loading}>
+              {t("loadAll")}
+            </button>
+          </>
         ) : (
           <span className="muted">{hasConnection && keys.length > 0 ? t("endOfList") : ""}</span>
         )}

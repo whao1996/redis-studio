@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -33,7 +34,6 @@ import type {
   ValueResult,
 } from "./types";
 
-const PAGE_SIZE = 200;
 const KEY_PANE_STORAGE = "redis-studio.key-pane-ratio";
 const KEY_PANE_WIDTH_STORAGE = "redis-studio.key-pane-content-width";
 const DEFAULT_KEY_PANE_RATIO = 0.55;
@@ -60,10 +60,25 @@ function loadKeyPaneContentWidth(): number {
     : KEY_PANE_FALLBACK_WIDTH;
 }
 
+function matchesFilter(key: string, query: string): boolean {
+  if (!query) return true;
+  return key.toLowerCase().includes(query.toLowerCase());
+}
+
+function localFilterQuery(value: string): string {
+  return value.trim().replace(/[*?\[\]]/g, "");
+}
+
+function toScanPattern(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "*";
+  return /[*?\[\]]/.test(trimmed) ? trimmed : `*${trimmed}*`;
+}
+
 type Toast = { kind: "ok" | "err"; text: string };
 
 export default function App() {
-  const { t } = useSettings();
+  const { t, scanPageSize } = useSettings();
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [saved, setSaved] = useState<SavedConnection[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -71,7 +86,7 @@ export default function App() {
   const [activeDB, setActiveDB] = useState(0);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [hasMore, setHasMore] = useState(false);
-  const [pattern, setPattern] = useState("*");
+  const [pattern, setPattern] = useState("");
   const [appliedPattern, setAppliedPattern] = useState("*");
   const [loadingDBs, setLoadingDBs] = useState(false);
   const [loadingKeys, setLoadingKeys] = useState(false);
@@ -91,6 +106,7 @@ export default function App() {
   const [keyPaneContentWidth, setKeyPaneContentWidth] = useState(loadKeyPaneContentWidth);
   const [resizingPanes, setResizingPanes] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const paneDragRef = useRef({ active: false, ratio: keyPaneRatio });
   const keyPaneCap = Math.max(300, Math.min(KEY_PANE_MAX_WIDTH, keyPaneContentWidth));
   const handleKeyPaneContentWidth = useCallback((width: number) => {
@@ -102,6 +118,14 @@ export default function App() {
     });
   }, []);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [localFilterActive, setLocalFilterActive] = useState(false);
+
+  const localQuery = localFilterQuery(pattern);
+  const localSearchActive = localFilterActive && pattern.trim() !== "";
+  const visibleKeys = useMemo(
+    () => (localFilterActive ? keys.filter((item) => matchesFilter(item.key, localQuery)) : keys),
+    [keys, localFilterActive, localQuery]
+  );
 
   const keysRef = useRef<KeyInfo[]>([]);
   const cursorRef = useRef("0");
@@ -222,7 +246,7 @@ export default function App() {
 
       // SCAN 可能返回空页，连续跟几页直到有数据或到达末尾。
       for (let page = 0; page < 5; page++) {
-        const result = await api.scanKeys(id, db, cursor, matchPattern, PAGE_SIZE);
+        const result = await api.scanKeys(id, db, cursor, matchPattern, scanPageSize);
         if (token !== scanToken.current) return;
 
         const incoming = result.keys ?? [];
@@ -244,6 +268,24 @@ export default function App() {
       applyKeys(merged);
       cursorRef.current = cursor;
       setHasMore(more);
+    } catch (error) {
+      if (token === scanToken.current) showToast("err", errorText(error, t));
+    } finally {
+      if (token === scanToken.current) setLoadingKeys(false);
+    }
+  }
+
+  async function loadAllKeys() {
+    if (!activeId) return;
+
+    const token = ++scanToken.current;
+    setLoadingKeys(true);
+    try {
+      const result = await api.scanAllKeys(activeId, activeDB, appliedPattern);
+      if (token !== scanToken.current) return;
+      applyKeys(result.keys ?? []);
+      cursorRef.current = "0";
+      setHasMore(false);
     } catch (error) {
       if (token === scanToken.current) showToast("err", errorText(error, t));
     } finally {
@@ -277,8 +319,9 @@ export default function App() {
     resetSelection();
     setDatabases([]);
     setActiveDB(0);
-    setPattern("*");
+    setPattern("");
     setAppliedPattern("*");
+    setLocalFilterActive(false);
     applyKeys([]);
     cursorRef.current = "0";
     setHasMore(false);
@@ -352,6 +395,20 @@ export default function App() {
       setModalError(errorText(error, t));
     } finally {
       setModalBusy(false);
+    }
+  }
+
+  async function handleMoveConnectionGroup(conn: SidebarConnection, group: string) {
+    const profile = saved.find((entry) => entry.id === conn.id);
+    const nextGroup = group.trim();
+    if (!profile || (profile.group ?? "") === nextGroup) return;
+
+    try {
+      await api.setConnectionGroup(conn.id, nextGroup);
+      await refreshSaved();
+      showToast("ok", t("connectionMovedGroup", { group: nextGroup || t("ungroupedConnections") }));
+    } catch (error) {
+      showToast("err", errorText(error, t));
     }
   }
 
@@ -457,8 +514,9 @@ export default function App() {
 
   function applySearch() {
     if (!activeId) return;
-    const nextPattern = pattern.trim() || "*";
+    const nextPattern = toScanPattern(pattern);
     setAppliedPattern(nextPattern);
+    setLocalFilterActive(false);
     resetSelection();
     void loadKeys(activeId, activeDB, nextPattern, true);
   }
@@ -516,13 +574,28 @@ export default function App() {
     }
   }
 
+  async function handleUpdateTTL(ttlSeconds: number): Promise<boolean> {
+    if (!activeId || !selected) return false;
+
+    const key = selected.key;
+    try {
+      await api.setKeyTTL(activeId, activeDB, key, ttlSeconds);
+      await loadValue(key, activeId, activeDB);
+      applyKeys(keysRef.current.map((item) => (item.key === key ? { ...item, ttl: ttlSeconds } : item)));
+      showToast("ok", t("ttlUpdated"));
+      return true;
+    } catch (error) {
+      showToast("err", errorText(error, t));
+      return false;
+    }
+  }
+
   async function handleDelete() {
     if (!activeId || !selected) return;
 
     try {
       await api.deleteKey(activeId, activeDB, selected.key);
-      const next = keysRef.current.filter((item) => item.key !== selected.key);
-      applyKeys(next);
+      applyKeys(keysRef.current.filter((item) => item.key !== selected.key));
       resetSelection();
       void refreshDatabases(activeId);
       showToast("ok", t("deleted"));
@@ -571,6 +644,7 @@ export default function App() {
             void handleDeleteSaved(conn.id);
           }
         }}
+        onMoveGroup={(conn, group) => void handleMoveConnectionGroup(conn, group)}
         onEdit={(conn) => {
           const profile = saved.find((entry) => entry.id === conn.id);
           if (!profile) return;
@@ -611,8 +685,12 @@ export default function App() {
                   <path d="m20 20-3.5-3.5" />
                 </svg>
                 <input
+                  ref={searchInputRef}
                   value={pattern}
-                  onChange={(event) => setPattern(event.target.value)}
+                  onChange={(event) => {
+                    setPattern(event.target.value);
+                    setLocalFilterActive(event.target.value.trim() !== "");
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") applySearch();
                   }}
@@ -620,6 +698,22 @@ export default function App() {
                   disabled={!activeId}
                   spellCheck={false}
                 />
+                {pattern !== "" && (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    title={t("clearSearch")}
+                    onClick={() => {
+                      setPattern("");
+                      setLocalFilterActive(false);
+                      searchInputRef.current?.focus();
+                    }}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="search-btn"
@@ -688,7 +782,7 @@ export default function App() {
             </button>
             <button
               type="button"
-              className="btn btn-ghost"
+              className="btn btn-primary"
               disabled={!activeId}
               onClick={() => {
                 setNewKeyError(null);
@@ -696,17 +790,6 @@ export default function App() {
               }}
             >
               {t("newKey")}
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => {
-                setEditing(null);
-                setModalError(null);
-                setModalOpen(true);
-              }}
-            >
-              {t("newConnection")}
             </button>
           </div>
         </header>
@@ -730,17 +813,18 @@ export default function App() {
             }}
           >
             <KeyBrowser
-              keys={keys}
+              keys={visibleKeys}
               selectedKey={selectedKey}
               loading={loadingKeys}
               hasMore={hasMore}
               hasConnection={activeId !== null}
               treeScope={`${activeId ?? "none"}:${activeDB}:${appliedPattern}`}
-              autoExpand={appliedPattern !== "*"}
+              autoExpand={appliedPattern !== "*" || localSearchActive}
               onSelect={(key) => void loadValue(key)}
               onLoadMore={() => {
                 if (activeId) void loadKeys(activeId, activeDB, appliedPattern, false);
               }}
+              onLoadAll={() => void loadAllKeys()}
               onRefresh={() => {
                 if (activeId) void loadKeys(activeId, activeDB, appliedPattern, true);
               }}
@@ -768,6 +852,7 @@ export default function App() {
               loading={loadingValue}
               onSave={handleSave}
               onEdit={handleEdit}
+              onUpdateTTL={handleUpdateTTL}
               onDelete={() => void handleDelete()}
               onRefresh={() => {
                 if (selectedKey) void loadValue(selectedKey);

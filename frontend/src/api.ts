@@ -59,6 +59,9 @@ export const api = {
       })
     ),
 
+  setConnectionGroup: (id: string, group: string) =>
+    toPromise<void>(RedisService.SetConnectionGroup(id, group)),
+
   getInstanceStatus: (id: string) =>
     toPromise<InstanceStatus>(RedisService.GetInstanceStatus(id)),
 
@@ -98,6 +101,9 @@ export const api = {
   scanKeys: (id: string, db: number, cursor: string, pattern: string, count: number) =>
     toPromise<ScanResult>(RedisService.ScanKeys(id, db, cursor, pattern, count)),
 
+  scanAllKeys: (id: string, db: number, pattern: string) =>
+    toPromise<ScanResult>(RedisService.ScanAllKeys(id, db, pattern)),
+
   getValue: (id: string, db: number, key: string) =>
     toPromise<ValueResult>(RedisService.GetValue(id, db, key)),
 
@@ -106,6 +112,9 @@ export const api = {
 
   deleteKey: (id: string, db: number, key: string) =>
     toPromise<void>(RedisService.DeleteKey(id, db, key)),
+
+  setKeyTTL: (id: string, db: number, key: string, ttlSeconds: number) =>
+    toPromise<void>(RedisService.SetKeyTTL(id, db, key, ttlSeconds)),
 
   edit: (id: string, db: number, key: string, payload: EditPayload) =>
     toPromise<void>(

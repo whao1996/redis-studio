@@ -20,11 +20,12 @@ import (
 )
 
 const (
-	defaultScanCount = 200
-	maxScanCount     = 1000
+	defaultScanCount = 1000
+	maxScanCount     = 10000
 	maxStringPreview = 1 << 20 // 1 MiB，超过则只读预览
 	maxCollection    = 500     // 集合类值单次最多展示的条目数
 	opTimeout        = 10 * time.Second
+	scanAllTimeout   = 5 * time.Minute
 	maxDatabases     = 64
 )
 
@@ -57,7 +58,8 @@ type DatabaseInfo struct {
 type KeyInfo struct {
 	Key  string `json:"key"`
 	Type string `json:"type"`
-	TTL  int64  `json:"ttl"` // 秒；-1 表示永不过期，-2 表示键不存在
+	TTL  int64  `json:"ttl"`  // 秒；-1 表示永不过期，-2 表示键不存在
+	Size int64  `json:"size"` // MEMORY USAGE，字节
 }
 
 type ScanResult struct {
@@ -331,6 +333,23 @@ func (s *RedisService) UpdateSavedConnection(profile ConnectionProfile) error {
 	return s.profiles.update(profile)
 }
 
+// SetConnectionGroup 只调整连接所属分组，活动连接也可以移动。
+func (s *RedisService) SetConnectionGroup(id, group string) error {
+	if s.profiles == nil {
+		return errors.New("connection store is not configured")
+	}
+
+	id = strings.TrimSpace(id)
+	group = strings.TrimSpace(group)
+	if id == "" {
+		return newAppError("connNotFound")
+	}
+	if _, ok := s.profiles.get(id); !ok {
+		return newAppError("connNotFound")
+	}
+	return s.profiles.setGroup(id, group)
+}
+
 // DeleteSavedConnection 删除已保存的连接；若当前已连接则一并断开。
 func (s *RedisService) DeleteSavedConnection(id string) error {
 	s.closeSubscriptions(id)
@@ -437,15 +456,66 @@ func (s *RedisService) ScanKeys(id string, db int, cursor string, pattern string
 		return result, nil
 	}
 
+	for _, item := range inspectKeys(ctx, client, keys) {
+		result.Keys = append(result.Keys, item)
+	}
+
+	return result, nil
+}
+
+// ScanAllKeys 扫描当前 DB 的全部键，一次性返回类型、TTL 与内存大小。
+func (s *RedisService) ScanAllKeys(id string, db int, pattern string) (ScanResult, error) {
+	entry, err := s.entry(id)
+	if err != nil {
+		return ScanResult{}, err
+	}
+
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		pattern = "*"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), scanAllTimeout)
+	defer cancel()
+
+	client := entry.client(db)
+	seen := make(map[string]struct{})
+	items := make([]KeyInfo, 0)
+	var cursor uint64
+	for {
+		keys, next, scanErr := client.Scan(ctx, cursor, pattern, 1000).Result()
+		if scanErr != nil {
+			return ScanResult{}, scanErr
+		}
+		for _, item := range inspectKeys(ctx, client, keys) {
+			if _, duplicate := seen[item.Key]; duplicate {
+				continue
+			}
+			seen[item.Key] = struct{}{}
+			items = append(items, item)
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+
+	return ScanResult{Keys: items, Cursor: "0", HasMore: false}, nil
+}
+
+func inspectKeys(ctx context.Context, client *redis.Client, keys []string) []KeyInfo {
 	pipe := client.Pipeline()
 	typeCmds := make([]*redis.StatusCmd, len(keys))
 	ttlCmds := make([]*redis.Cmd, len(keys))
+	sizeCmds := make([]*redis.Cmd, len(keys))
 	for i, key := range keys {
 		typeCmds[i] = pipe.Type(ctx, key)
 		ttlCmds[i] = pipe.Do(ctx, "TTL", key)
+		sizeCmds[i] = pipe.Do(ctx, "MEMORY", "USAGE", key)
 	}
 	_, _ = pipe.Exec(ctx)
 
+	items := make([]KeyInfo, len(keys))
 	for i, key := range keys {
 		typ := typeCmds[i].Val()
 		if typ == "" {
@@ -455,10 +525,10 @@ func (s *RedisService) ScanKeys(id string, db int, cursor string, pattern string
 		if v, ttlErr := ttlCmds[i].Int64(); ttlErr == nil {
 			ttl = v
 		}
-		result.Keys = append(result.Keys, KeyInfo{Key: key, Type: typ, TTL: ttl})
+		size, _ := sizeCmds[i].Int64()
+		items[i] = KeyInfo{Key: key, Type: typ, TTL: ttl, Size: size}
 	}
-
-	return result, nil
+	return items
 }
 
 // GetValue 根据 key 类型返回结构化的值，集合类最多返回 maxCollection 条。
@@ -756,6 +826,42 @@ func (s *RedisService) DeleteKey(id string, db int, key string) error {
 	defer cancel()
 
 	return entry.client(db).Del(ctx, key).Err()
+}
+
+// SetKeyTTL 修改 key 的过期时间；ttlSeconds 为 -1 时清除过期时间。
+func (s *RedisService) SetKeyTTL(id string, db int, key string, ttlSeconds int64) error {
+	entry, err := s.entry(id)
+	if err != nil {
+		return err
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return newAppError("keyRequired")
+	}
+	if ttlSeconds == 0 || ttlSeconds < -1 {
+		return newAppError("ttlInvalid")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
+
+	client := entry.client(db)
+	if ttlSeconds == -1 {
+		if _, err := client.Persist(ctx, key).Result(); err != nil {
+			return err
+		}
+	} else if _, err := client.Expire(ctx, key, time.Duration(ttlSeconds)*time.Second).Result(); err != nil {
+		return err
+	}
+
+	exists, err := client.Exists(ctx, key).Result()
+	if err != nil {
+		return err
+	}
+	if exists == 0 {
+		return newAppError("keyNotFound", "key", key)
+	}
+	return nil
 }
 
 // CreateKey 创建一个指定类型的新 key。

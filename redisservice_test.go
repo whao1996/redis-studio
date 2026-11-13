@@ -72,6 +72,24 @@ func TestStringLifecycle(t *testing.T) {
 	}
 }
 
+func TestScanAllKeys(t *testing.T) {
+	svc, mr, id := startService(t)
+	mr.Set("a:1", "one")
+	mr.Set("a:2", "two")
+	mr.HSet("b:1", "field", "value")
+
+	all, err := svc.ScanAllKeys(id, 0, "*")
+	if err != nil {
+		t.Fatalf("scan all: %v", err)
+	}
+	if len(all.Keys) != 3 {
+		t.Fatalf("expected 3 keys, got %+v", all.Keys)
+	}
+	if all.HasMore || all.Cursor != "0" {
+		t.Fatalf("unexpected scan all result: %+v", all)
+	}
+}
+
 func TestCollectionValues(t *testing.T) {
 	svc, mr, id := startService(t)
 
@@ -694,6 +712,64 @@ func TestUpdateSavedConnection(t *testing.T) {
 
 	if err := svc.UpdateSavedConnection(ConnectionProfile{ID: "missing", Host: host, Port: port}); err == nil {
 		t.Fatal("expected error for unknown connection")
+	}
+}
+
+func TestSetConnectionGroup(t *testing.T) {
+	svc, _, id := startService(t)
+
+	if err := svc.SetConnectionGroup(id, " Production "); err != nil {
+		t.Fatalf("set group: %v", err)
+	}
+	saved := svc.ListSavedConnections()
+	if len(saved) != 1 || saved[0].Group != "Production" {
+		t.Fatalf("unexpected group after move: %+v", saved)
+	}
+
+	// 活动连接也允许调整分组。
+	if err := svc.SetConnectionGroup(id, ""); err != nil {
+		t.Fatalf("clear group: %v", err)
+	}
+	if saved := svc.ListSavedConnections(); saved[0].Group != "" {
+		t.Fatalf("expected ungrouped connection: %+v", saved)
+	}
+
+	if err := svc.SetConnectionGroup("missing", "x"); err == nil {
+		t.Fatal("expected error for unknown connection")
+	}
+}
+
+func TestSetKeyTTL(t *testing.T) {
+	svc, mr, id := startService(t)
+	mr.Set("ttl:key", "value")
+
+	if err := svc.SetKeyTTL(id, 0, "ttl:key", 120); err != nil {
+		t.Fatalf("set ttl: %v", err)
+	}
+	value, err := svc.GetValue(id, 0, "ttl:key")
+	if err != nil {
+		t.Fatalf("get value: %v", err)
+	}
+	if value.TTL <= 0 {
+		t.Fatalf("expected positive ttl, got %d", value.TTL)
+	}
+
+	if err := svc.SetKeyTTL(id, 0, "ttl:key", -1); err != nil {
+		t.Fatalf("persist key: %v", err)
+	}
+	value, err = svc.GetValue(id, 0, "ttl:key")
+	if err != nil {
+		t.Fatalf("get value after persist: %v", err)
+	}
+	if value.TTL != -1 {
+		t.Fatalf("expected no expiry after persist, got %d", value.TTL)
+	}
+
+	if err := svc.SetKeyTTL(id, 0, "ttl:key", 0); err == nil {
+		t.Fatal("expected error for zero ttl")
+	}
+	if err := svc.SetKeyTTL(id, 0, "missing:key", 60); err == nil {
+		t.Fatal("expected error for missing key")
 	}
 }
 

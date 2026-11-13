@@ -9,26 +9,47 @@ interface Props {
   onAdd: () => void;
   onAction: (conn: SidebarConnection) => void;
   onEdit: (conn: SidebarConnection) => void;
+  onMoveGroup: (conn: SidebarConnection, group: string) => void;
   onOpenSettings: () => void;
 }
 
 interface ConnectionItemProps {
   conn: SidebarConnection;
   active: boolean;
+  dragging: boolean;
   onSelect: (conn: SidebarConnection) => void;
   onAction: (conn: SidebarConnection) => void;
   onEdit: (conn: SidebarConnection) => void;
   onRequestDelete: (conn: SidebarConnection) => void;
+  onDragStart: (conn: SidebarConnection) => void;
+  onDragEnd: () => void;
 }
 
-function ConnectionItem({ conn, active, onSelect, onAction, onEdit, onRequestDelete }: ConnectionItemProps) {
+function ConnectionItem({
+  conn,
+  active,
+  dragging,
+  onSelect,
+  onAction,
+  onEdit,
+  onRequestDelete,
+  onDragStart,
+  onDragEnd,
+}: ConnectionItemProps) {
   const { t } = useSettings();
 
   return (
     <div
-      className={"conn-item" + (active ? " active" : "")}
+      className={"conn-item" + (active ? " active" : "") + (dragging ? " dragging" : "")}
       role="button"
       tabIndex={0}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", conn.id);
+        onDragStart(conn);
+      }}
+      onDragEnd={onDragEnd}
       onClick={() => onSelect(conn)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -93,10 +114,12 @@ function ConnectionItem({ conn, active, onSelect, onAction, onEdit, onRequestDel
   );
 }
 
-export default function Sidebar({ connections, activeId, onSelect, onAdd, onAction, onEdit, onOpenSettings }: Props) {
+export default function Sidebar({ connections, activeId, onSelect, onAdd, onAction, onEdit, onMoveGroup, onOpenSettings }: Props) {
   const { t } = useSettings();
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<SidebarConnection | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
 
   useEffect(() => {
     if (!pendingDelete) return;
@@ -147,10 +170,61 @@ export default function Sidebar({ connections, activeId, onSelect, onAdd, onActi
     });
   };
 
+  const endDrag = () => {
+    setDraggingId(null);
+    setDropTarget(null);
+  };
+
+  const handleDrop = (group: string) => {
+    const conn = connections.find((item) => item.id === draggingId);
+    if (!conn) {
+      endDrag();
+      return;
+    }
+
+    const current = conn.group?.trim() ?? "";
+    if (current !== group) {
+      onMoveGroup(conn, group);
+    }
+    setCollapsedGroups((prev) => {
+      if (!prev.has(group)) return prev;
+      const next = new Set(prev);
+      next.delete(group);
+      return next;
+    });
+    endDrag();
+  };
+
+  const draggingGroup = connections.find((conn) => conn.id === draggingId)?.group?.trim() ?? "";
+
   const renderGroup = (group: string, list: SidebarConnection[]) => {
     const open = !collapsedGroups.has(group);
+    const canDrop = draggingId !== null && draggingGroup !== group;
     return (
-      <div className={"conn-group" + (open ? " open" : "")} key={group || "__ungrouped__"}>
+      <div
+        className={
+          "conn-group" +
+          (open ? " open" : "") +
+          (dropTarget === group && canDrop ? " drop-target" : "")
+        }
+        key={group || "__ungrouped__"}
+        onDragOver={(event) => {
+          if (!canDrop) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          if (dropTarget !== group) setDropTarget(group);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setDropTarget((current) => (current === group ? null : current));
+          }
+        }}
+        onDrop={(event) => {
+          if (!canDrop) return;
+          event.preventDefault();
+          handleDrop(group);
+        }}
+      >
         <button
           type="button"
           className="conn-group-head"
@@ -170,10 +244,13 @@ export default function Sidebar({ connections, activeId, onSelect, onAdd, onActi
                 key={conn.id}
                 conn={conn}
                 active={conn.id === activeId}
+                dragging={draggingId === conn.id}
                 onSelect={onSelect}
                 onAction={onAction}
                 onEdit={onEdit}
                 onRequestDelete={setPendingDelete}
+                onDragStart={(item) => setDraggingId(item.id)}
+                onDragEnd={endDrag}
               />
             ))}
           </div>
@@ -201,7 +278,7 @@ export default function Sidebar({ connections, activeId, onSelect, onAdd, onActi
       <div className="sidebar-section">
         <div className="section-head">
           <span>{t("connections")}</span>
-          <button type="button" className="icon-btn" title={t("newConnection")} onClick={onAdd}>
+          <button type="button" className="icon-btn conn-add-btn" title={t("newConnection")} onClick={onAdd}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
               <path d="M12 5v14M5 12h14" />
             </svg>
@@ -217,7 +294,7 @@ export default function Sidebar({ connections, activeId, onSelect, onAdd, onActi
           ) : hasGroups ? (
             <>
               {groupNames.map((group) => renderGroup(group, groups.get(group) ?? []))}
-              {ungrouped.length > 0 && renderGroup("", ungrouped)}
+              {(ungrouped.length > 0 || draggingId !== null) && renderGroup("", ungrouped)}
             </>
           ) : (
             connections.map((conn) => (
@@ -225,10 +302,13 @@ export default function Sidebar({ connections, activeId, onSelect, onAdd, onActi
                 key={conn.id}
                 conn={conn}
                 active={conn.id === activeId}
+                dragging={draggingId === conn.id}
                 onSelect={onSelect}
                 onAction={onAction}
                 onEdit={onEdit}
                 onRequestDelete={setPendingDelete}
+                onDragStart={(item) => setDraggingId(item.id)}
+                onDragEnd={endDrag}
               />
             ))
           )}

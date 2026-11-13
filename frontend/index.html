@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/redis.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>
+      // Windows 使用系统标题栏，不需要为 macOS 红绿灯预留顶部空间。
+      (function () {
+        var ua = navigator.userAgent || "";
+        var platform = navigator.platform || "";
+        var os = "linux";
+        if (/Windows/i.test(ua) || /Windows/i.test(platform)) {
+          os = "windows";
+        } else if (/Mac/i.test(ua) || /Mac/i.test(platform)) {
+          os = "macos";
+        }
+        document.documentElement.dataset.os = os;
+      })();
+    </script>
     <link rel="stylesheet" href="/style.css" />
     <title>Redis Studio</title>
   </head>

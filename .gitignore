@@ -7,3 +7,4 @@ frontend/node_modules
 /redis-studio
 *.exe
 *.syso
+/loadtest

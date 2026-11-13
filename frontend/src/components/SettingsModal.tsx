@@ -1,5 +1,11 @@
-import { useEffect } from "react";
-import { useSettings, type FontSize, type ThemeMode } from "../settings";
+import { useEffect, useState } from "react";
+import {
+  MAX_SCAN_PAGE_SIZE,
+  MIN_SCAN_PAGE_SIZE,
+  useSettings,
+  type FontSize,
+  type ThemeMode,
+} from "../settings";
 import type { Lang } from "../i18n";
 
 interface Props {
@@ -38,7 +44,30 @@ function Segmented<T extends string>({
 }
 
 export default function SettingsModal({ open, onClose }: Props) {
-  const { t, language, setLanguage, theme, setTheme, fontSize, setFontSize } = useSettings();
+  const {
+    t,
+    language,
+    setLanguage,
+    theme,
+    setTheme,
+    fontSize,
+    setFontSize,
+    scanPageSize,
+    setScanPageSize,
+  } = useSettings();
+  const [scanDraft, setScanDraft] = useState(String(scanPageSize));
+
+  useEffect(() => {
+    if (open) setScanDraft(String(scanPageSize));
+  }, [open]);
+
+  const updateScanDraft = (value: string) => {
+    setScanDraft(value);
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed >= MIN_SCAN_PAGE_SIZE && parsed <= MAX_SCAN_PAGE_SIZE) {
+      setScanPageSize(parsed);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -109,6 +138,22 @@ export default function SettingsModal({ open, onClose }: Props) {
               ]}
               onChange={setFontSize}
             />
+          </div>
+
+          <div className="settings-group">
+            <span className="settings-label">{t("scanPageSize")}</span>
+            <div className="settings-number">
+              <input
+                type="number"
+                min={MIN_SCAN_PAGE_SIZE}
+                max={MAX_SCAN_PAGE_SIZE}
+                step={100}
+                value={scanDraft}
+                onChange={(event) => updateScanDraft(event.target.value)}
+                onBlur={() => setScanDraft(String(scanPageSize))}
+              />
+              <span className="settings-hint">{t("scanPageSizeHint")}</span>
+            </div>
           </div>
         </div>
 

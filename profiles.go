@@ -130,6 +130,19 @@ func (s *profileStore) update(profile ConnectionProfile) error {
 	return errors.New("connection profile not found")
 }
 
+func (s *profileStore) setGroup(id, group string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.profiles {
+		if s.profiles[i].ID == id {
+			s.profiles[i].Group = group
+			return s.persistLocked()
+		}
+	}
+	return errors.New("connection profile not found")
+}
+
 func (s *profileStore) remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

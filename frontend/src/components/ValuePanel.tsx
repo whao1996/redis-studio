@@ -19,6 +19,7 @@ interface Props {
   loading: boolean;
   onSave: (value: string, ttlSeconds: number) => Promise<boolean>;
   onEdit: (payload: EditPayload) => Promise<boolean>;
+  onUpdateTTL: (ttlSeconds: number) => Promise<boolean>;
   onDelete: () => void;
   onRefresh: () => void;
 }
@@ -83,7 +84,7 @@ function highlightJSON(text: string): ReactNode {
   return tokens;
 }
 
-export default function ValuePanel({ value, loading, onSave, onEdit, onDelete, onRefresh }: Props) {
+export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL, onDelete, onRefresh }: Props) {
   const { t } = useSettings();
   const [draft, setDraft] = useState("");
   const [ttlInput, setTtlInput] = useState("");
@@ -92,9 +93,14 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onDelete, o
   const [formError, setFormError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [keyCopied, setKeyCopied] = useState(false);
   const [jsonEditing, setJSONEditing] = useState(false);
   const [jsonBusy, setJSONBusy] = useState(false);
   const [jsonError, setJSONError] = useState<string | null>(null);
+  const [ttlEditing, setTTLEditing] = useState(false);
+  const [ttlDraft, setTTLDraft] = useState("");
+  const [ttlBusy, setTTLBusy] = useState(false);
+  const [ttlError, setTTLError] = useState<string | null>(null);
 
   useEffect(() => {
     setDraft(value?.value ?? "");
@@ -103,8 +109,13 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onDelete, o
     setFormError(null);
     setConfirming(false);
     setCopied(false);
+    setKeyCopied(false);
     setJSONEditing(false);
     setJSONError(null);
+    setTTLEditing(false);
+    setTTLDraft(value && value.ttl > 0 ? String(value.ttl) : "");
+    setTTLBusy(false);
+    setTTLError(null);
   }, [value]);
 
   if (loading) {
@@ -165,10 +176,17 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onDelete, o
     if (ok) setDirty(false);
   };
 
-  const copyJSON = async () => {
+  const copyValue = async () => {
     if (await copyText(draft)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
+    }
+  };
+
+  const copyKeyName = async () => {
+    if (await copyText(value.key)) {
+      setKeyCopied(true);
+      window.setTimeout(() => setKeyCopied(false), 1500);
     }
   };
 
@@ -203,6 +221,31 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onDelete, o
     if (ok) setJSONEditing(false);
   };
 
+  const openTTLEditor = () => {
+    setTTLDraft(value.ttl > 0 ? String(value.ttl) : "");
+    setTTLError(null);
+    setTTLEditing(true);
+  };
+
+  const saveTTL = async () => {
+    const text = ttlDraft.trim();
+    let ttl = -1;
+    if (text !== "") {
+      const parsed = Number(text);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        setTTLError(t("ttlInputInvalid"));
+        return;
+      }
+      ttl = parsed;
+    }
+
+    setTTLBusy(true);
+    setTTLError(null);
+    const ok = await onUpdateTTL(ttl);
+    setTTLBusy(false);
+    if (ok) setTTLEditing(false);
+  };
+
   return (
     <aside className="value-panel">
       <div className="value-head">
@@ -211,16 +254,39 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onDelete, o
             {value.key}
           </span>
           <span className={`type-badge type-${value.type}`}>{typeLabel(value.type)}</span>
+          <button
+            type="button"
+            className="icon-btn key-copy-btn"
+            title={keyCopied ? t("copied") : t("copyKeyName")}
+            onClick={() => void copyKeyName()}
+          >
+            {keyCopied ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m5 12 5 5L20 7" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="11" height="11" rx="2" />
+                <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+              </svg>
+            )}
+          </button>
         </div>
         <div className="value-actions">
-          <span className="meta">TTL {formatTTL(value.ttl, t)}</span>
+          <button type="button" className="ttl-meta" title={t("editTTL")} onClick={openTTLEditor}>
+            <span>TTL {formatTTL(value.ttl, t)}</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z" />
+            </svg>
+          </button>
           {isJSON ? (
             <span className="meta">{formatBytes(value.length)}</span>
           ) : (
             !isString && !isModule && <span className="meta">{t("itemsCount", { count: value.length })}</span>
           )}
-          {isJSON && (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyJSON()}>
+          {(isJSON || isString) && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyValue()}>
               {copied ? t("copied") : t("copy")}
             </button>
           )}
@@ -240,6 +306,38 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onDelete, o
           </button>
         </div>
       </div>
+
+      {ttlEditing && (
+        <div className="ttl-edit-bar">
+          <span className="ttl-edit-label">{t("ttlEditorLabel")}</span>
+          <input
+            type="number"
+            min={1}
+            value={ttlDraft}
+            onChange={(event) => {
+              setTTLDraft(event.target.value);
+              setTTLError(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void saveTTL();
+              }
+              if (event.key === "Escape") setTTLEditing(false);
+            }}
+            placeholder={t("neverExpires")}
+            autoFocus
+            disabled={ttlBusy}
+          />
+          {ttlError && <span className="ttl-edit-error">{ttlError}</span>}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setTTLEditing(false)} disabled={ttlBusy}>
+            {t("cancel")}
+          </button>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => void saveTTL()} disabled={ttlBusy}>
+            {ttlBusy ? t("saving") : t("save")}
+          </button>
+        </div>
+      )}
 
       {confirming && (
         <div className="confirm-bar">

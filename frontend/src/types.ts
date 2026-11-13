@@ -47,6 +47,7 @@ export interface KeyInfo {
   key: string;
   type: string;
   ttl: number;
+  size: number;
 }
 
 export interface ScanResult {
@@ -223,5 +224,4 @@ export interface KeyAnalysis {
   namespaces: NamespaceSummary[];
   topByMemory: KeyAnalysisItem[];
   topByLength: KeyAnalysisItem[];
-  truncated: boolean;
 }

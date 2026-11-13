@@ -130,14 +130,35 @@ export function Publish(connectionID: string, db: number, channel: string, messa
 }
 
 /**
+ * ScanAllKeys 扫描当前 DB 的全部键，一次性返回类型、TTL 与内存大小。
+ */
+export function ScanAllKeys(id: string, db: number, pattern: string): $CancellablePromise<$models.ScanResult> {
+    return $Call.ByID(4166381590, id, db, pattern);
+}
+
+/**
  * ScanKeys 使用 SCAN 游标增量读取 key，避免阻塞 Redis。
  */
 export function ScanKeys(id: string, db: number, cursor: string, pattern: string, count: number): $CancellablePromise<$models.ScanResult> {
     return $Call.ByID(977717551, id, db, cursor, pattern, count);
 }
 
+/**
+ * SetConnectionGroup 只调整连接所属分组，活动连接也可以移动。
+ */
+export function SetConnectionGroup(id: string, group: string): $CancellablePromise<void> {
+    return $Call.ByID(455086433, id, group);
+}
+
 export function SetEventEmitter(emitter: any): $CancellablePromise<void> {
     return $Call.ByID(3161492580, emitter);
+}
+
+/**
+ * SetKeyTTL 修改 key 的过期时间；ttlSeconds 为 -1 时清除过期时间。
+ */
+export function SetKeyTTL(id: string, db: number, key: string, ttlSeconds: number): $CancellablePromise<void> {
+    return $Call.ByID(682003511, id, db, key, ttlSeconds);
 }
 
 /**

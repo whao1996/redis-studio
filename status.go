@@ -406,10 +406,7 @@ func infoFloat(values map[string]string, key string) float64 {
 	return number
 }
 
-const (
-	maxAnalysisKeys = 5000
-	analysisTimeout = 30 * time.Second
-)
+const analysisTimeout = 5 * time.Minute
 
 type TypeSummary struct {
 	Type   string `json:"type"`
@@ -439,7 +436,6 @@ type KeyAnalysis struct {
 	Namespaces  []NamespaceSummary `json:"namespaces"`
 	TopByMemory []KeyAnalysisItem  `json:"topByMemory"`
 	TopByLength []KeyAnalysisItem  `json:"topByLength"`
-	Truncated   bool               `json:"truncated"`
 }
 
 // GetKeyAnalysis 扫描当前 DB，统计各类型内存/数量、命名空间和 Top Key。
@@ -511,10 +507,6 @@ func (s *RedisService) GetKeyAnalysis(connectionID string, db int, topN int) (Ke
 
 		cursor = next
 		if cursor == 0 {
-			break
-		}
-		if len(items) >= maxAnalysisKeys {
-			result.Truncated = true
 			break
 		}
 	}

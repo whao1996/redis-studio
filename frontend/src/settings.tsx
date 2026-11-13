@@ -4,16 +4,22 @@ import { dictionaries, type Lang, type TranslationKey } from "./i18n";
 export type ThemeMode = "light" | "dark" | "system";
 export type FontSize = "small" | "medium" | "large";
 
+export const DEFAULT_SCAN_PAGE_SIZE = 1000;
+export const MIN_SCAN_PAGE_SIZE = 100;
+export const MAX_SCAN_PAGE_SIZE = 5000;
+
 interface SettingsState {
   language: Lang;
   theme: ThemeMode;
   fontSize: FontSize;
+  scanPageSize: number;
 }
 
 interface SettingsContextValue extends SettingsState {
   setLanguage: (language: Lang) => void;
   setTheme: (theme: ThemeMode) => void;
   setFontSize: (size: FontSize) => void;
+  setScanPageSize: (size: number) => void;
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
 }
 
@@ -24,16 +30,23 @@ function loadSettings(): SettingsState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<SettingsState>;
+      const scanPageSize = Number(parsed.scanPageSize);
       return {
         language: parsed.language === "en" ? "en" : "zh",
         theme: parsed.theme === "light" || parsed.theme === "system" ? parsed.theme : "dark",
         fontSize: parsed.fontSize === "small" || parsed.fontSize === "large" ? parsed.fontSize : "medium",
+        scanPageSize:
+          Number.isInteger(scanPageSize) &&
+          scanPageSize >= MIN_SCAN_PAGE_SIZE &&
+          scanPageSize <= MAX_SCAN_PAGE_SIZE
+            ? scanPageSize
+            : DEFAULT_SCAN_PAGE_SIZE,
       };
     }
   } catch {
     // 配置损坏时回退到默认值。
   }
-  return { language: "zh", theme: "dark", fontSize: "medium" };
+  return { language: "zh", theme: "dark", fontSize: "medium", scanPageSize: DEFAULT_SCAN_PAGE_SIZE };
 }
 
 const SettingsContext = createContext<SettingsContextValue | null>(null);
@@ -84,6 +97,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setLanguage: (language) => setSettings((prev) => ({ ...prev, language })),
     setTheme: (theme) => setSettings((prev) => ({ ...prev, theme })),
     setFontSize: (fontSize) => setSettings((prev) => ({ ...prev, fontSize })),
+    setScanPageSize: (scanPageSize) => setSettings((prev) => ({ ...prev, scanPageSize })),
     t,
   };
 
