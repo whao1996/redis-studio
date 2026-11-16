@@ -756,11 +756,11 @@ body.is-resizing-panes * {
 
 .key-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 68px 76px;
+  grid-template-columns: minmax(0, 1fr) 64px 60px;
   align-items: center;
-  gap: 12px;
+  gap: 20px;
   width: 100%;
-  padding: 9px 18px;
+  padding: 9px 50px 9px 18px;
   border: 0;
   border-bottom: 1px solid var(--border-soft);
   background: transparent;
@@ -784,11 +784,11 @@ body.is-resizing-panes * {
 
 .tree-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 68px 76px;
+  grid-template-columns: minmax(0, 1fr) 64px 60px;
   align-items: center;
-  gap: 12px;
+  gap: 20px;
   width: 100%;
-  padding: 8px 18px;
+  padding: 8px 50px 8px 18px;
   border: 0;
   border-bottom: 1px solid var(--border-soft);
   background: transparent;
@@ -931,6 +931,98 @@ body.is-resizing-panes * {
 }
 .key-size-head {
   text-align: right;
+}
+
+.tree-row {
+  position: relative;
+}
+
+.key-actions {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 38px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.key-actions button {
+  pointer-events: auto;
+}
+
+.folder-actions {
+  justify-content: center;
+}
+
+.folder-action-btn {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-2);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.tree-folder:hover .folder-action-btn,
+.tree-folder:focus-within .folder-action-btn {
+  opacity: 1;
+  visibility: visible;
+}
+
+.folder-action-btn:hover {
+  background: var(--bg-hover-strong);
+  color: var(--text);
+}
+
+.folder-action-btn.danger:hover {
+  background: rgba(229, 72, 77, 0.14);
+  color: #ff8b8f;
+}
+
+.folder-action-btn svg {
+  width: 11px;
+  height: 11px;
+}
+
+.key-delete-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-2);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.tree-leaf:hover .key-delete-btn,
+.tree-leaf:focus-within .key-delete-btn {
+  opacity: 1;
+  visibility: visible;
+}
+
+.key-delete-btn:hover {
+  background: rgba(229, 72, 77, 0.14);
+  color: #ff8b8f;
+}
+
+.key-delete-btn svg {
+  width: 12px;
+  height: 12px;
 }
 
 .key-size {

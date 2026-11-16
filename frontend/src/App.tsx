@@ -75,6 +75,10 @@ function toScanPattern(value: string): string {
   return /[*?\[\]]/.test(trimmed) ? trimmed : `*${trimmed}*`;
 }
 
+function escapeGlob(value: string): string {
+  return value.replace(/[\\*?\[\]]/g, "\\$&");
+}
+
 type Toast = { kind: "ok" | "err"; text: string };
 
 export default function App() {
@@ -590,15 +594,56 @@ export default function App() {
     }
   }
 
-  async function handleDelete() {
-    if (!activeId || !selected) return;
+  async function handleDeleteKey(key: string) {
+    if (!activeId) return;
 
     try {
-      await api.deleteKey(activeId, activeDB, selected.key);
-      applyKeys(keysRef.current.filter((item) => item.key !== selected.key));
-      resetSelection();
+      await api.deleteKey(activeId, activeDB, key);
+      applyKeys(keysRef.current.filter((item) => item.key !== key));
+      if (selectedKey === key) resetSelection();
       void refreshDatabases(activeId);
       showToast("ok", t("deleted"));
+    } catch (error) {
+      showToast("err", errorText(error, t));
+    }
+  }
+
+  async function handleDelete() {
+    if (selected) await handleDeleteKey(selected.key);
+  }
+
+  async function refreshFolder(path: string) {
+    if (!activeId) return;
+
+    const prefix = `${path}:`;
+    try {
+      const result = await api.scanAllKeys(activeId, activeDB, `${escapeGlob(path)}:*`);
+      const fresh = result.keys ?? [];
+      const rest = keysRef.current.filter((item) => !item.key.startsWith(prefix));
+      applyKeys([...rest, ...fresh]);
+      if (selectedKey?.startsWith(prefix)) {
+        if (fresh.some((item) => item.key === selectedKey)) {
+          void loadValue(selectedKey, activeId, activeDB);
+        } else {
+          resetSelection();
+        }
+      }
+      showToast("ok", t("folderRefreshed"));
+    } catch (error) {
+      showToast("err", errorText(error, t));
+    }
+  }
+
+  async function deleteFolder(path: string) {
+    if (!activeId) return;
+
+    const prefix = `${path}:`;
+    try {
+      const removed = await api.deleteNamespace(activeId, activeDB, path);
+      applyKeys(keysRef.current.filter((item) => !item.key.startsWith(prefix)));
+      if (selectedKey?.startsWith(prefix)) resetSelection();
+      void refreshDatabases(activeId);
+      showToast("ok", t("folderDeleted", { count: removed }));
     } catch (error) {
       showToast("err", errorText(error, t));
     }
@@ -821,6 +866,9 @@ export default function App() {
               treeScope={`${activeId ?? "none"}:${activeDB}:${appliedPattern}`}
               autoExpand={appliedPattern !== "*" || localSearchActive}
               onSelect={(key) => void loadValue(key)}
+              onDeleteKey={(key) => void handleDeleteKey(key)}
+              onRefreshFolder={(path) => void refreshFolder(path)}
+              onDeleteFolder={(path) => void deleteFolder(path)}
               onLoadMore={() => {
                 if (activeId) void loadKeys(activeId, activeDB, appliedPattern, false);
               }}

@@ -104,6 +104,9 @@ export const api = {
   scanAllKeys: (id: string, db: number, pattern: string) =>
     toPromise<ScanResult>(RedisService.ScanAllKeys(id, db, pattern)),
 
+  deleteNamespace: (id: string, db: number, prefix: string) =>
+    toPromise<number>(RedisService.DeleteNamespace(id, db, prefix)),
+
   getValue: (id: string, db: number, key: string) =>
     toPromise<ValueResult>(RedisService.GetValue(id, db, key)),
 

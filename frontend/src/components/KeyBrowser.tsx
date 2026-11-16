@@ -15,6 +15,9 @@ interface Props {
   treeScope: string;
   autoExpand: boolean;
   onSelect: (key: string) => void;
+  onDeleteKey: (key: string) => void;
+  onRefreshFolder: (path: string) => void;
+  onDeleteFolder: (path: string) => void;
   onLoadMore: () => void;
   onLoadAll: () => void;
   onRefresh: () => void;
@@ -28,6 +31,9 @@ interface FolderRowProps {
   onToggle: (path: string) => void;
   selectedKey: string | null;
   onSelect: (key: string) => void;
+  onRequestDelete: (key: string) => void;
+  onRefreshFolder: (path: string) => void;
+  onRequestDeleteFolder: (path: string) => void;
   limits: Record<string, number>;
   onShowMore: (path: string) => void;
 }
@@ -39,6 +45,9 @@ function FolderRow({
   onToggle,
   selectedKey,
   onSelect,
+  onRequestDelete,
+  onRefreshFolder,
+  onRequestDeleteFolder,
   limits,
   onShowMore,
 }: FolderRowProps) {
@@ -50,10 +59,17 @@ function FolderRow({
 
   return (
     <>
-      <button
-        type="button"
+      <div
         className={"tree-row tree-folder" + (open ? " open" : "")}
+        role="button"
+        tabIndex={0}
         onClick={() => onToggle(folder.path)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onToggle(folder.path);
+          }
+        }}
         title={folder.path}
       >
         <span className="tree-label" style={{ paddingLeft: depth * 16 }}>
@@ -67,8 +83,32 @@ function FolderRow({
           <span className="tree-count">{folder.count}</span>
         </span>
         <span />
-        <span />
-      </button>
+        <span className="key-actions folder-actions" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            className="folder-action-btn"
+            title={t("refreshFolder")}
+            onClick={() => onRefreshFolder(folder.path)}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v6h-6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="folder-action-btn danger"
+            title={t("deleteFolder")}
+            onClick={() => onRequestDeleteFolder(folder.path)}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 6h18" />
+              <path d="M8 6V4h8v2" />
+              <path d="M19 6l-1 14H6L5 6" />
+            </svg>
+          </button>
+        </span>
+      </div>
 
       {open && (
         <>
@@ -81,6 +121,9 @@ function FolderRow({
               onToggle={onToggle}
               selectedKey={selectedKey}
               onSelect={onSelect}
+              onRequestDelete={onRequestDelete}
+              onRefreshFolder={onRefreshFolder}
+              onRequestDeleteFolder={onRequestDeleteFolder}
               limits={limits}
               onShowMore={onShowMore}
             />
@@ -92,6 +135,7 @@ function FolderRow({
               depth={depth + 1}
               selectedKey={selectedKey}
               onSelect={onSelect}
+              onRequestDelete={onRequestDelete}
             />
           ))}
           {remaining > 0 && (
@@ -115,9 +159,10 @@ interface LeafRowProps {
   depth: number;
   selectedKey: string | null;
   onSelect: (key: string) => void;
+  onRequestDelete: (key: string) => void;
 }
 
-function LeafRow({ item, depth, selectedKey, onSelect }: LeafRowProps) {
+function LeafRow({ item, depth, selectedKey, onSelect, onRequestDelete }: LeafRowProps) {
   const { t } = useSettings();
 
   return (
@@ -141,6 +186,24 @@ function LeafRow({ item, depth, selectedKey, onSelect }: LeafRowProps) {
       </span>
       <span className="key-ttl">{formatTTL(item.ttl, t)}</span>
       <span className="key-size">{formatBytes(item.size)}</span>
+      <span className="key-actions" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+        <button
+          type="button"
+          className="key-delete-btn"
+          title={t("delete")}
+          aria-label={t("delete")}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRequestDelete(item.key);
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 6h18" />
+            <path d="M8 6V4h8v2" />
+            <path d="M19 6l-1 14H6L5 6" />
+          </svg>
+        </button>
+      </span>
     </div>
   );
 }
@@ -154,6 +217,9 @@ export default function KeyBrowser({
   treeScope,
   autoExpand,
   onSelect,
+  onDeleteKey,
+  onRefreshFolder,
+  onDeleteFolder,
   onLoadMore,
   onLoadAll,
   onRefresh,
@@ -164,6 +230,8 @@ export default function KeyBrowser({
   const folderPaths = useMemo(() => collectFolderPaths(tree), [tree]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [folderLimits, setFolderLimits] = useState<Record<string, number>>({});
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [pendingFolderDelete, setPendingFolderDelete] = useState<string | null>(null);
   const rootLimit = folderLimits[""] ?? FOLDER_RENDER_STEP;
   const rootKeys = tree.keys.slice(0, rootLimit);
   const rootRemaining = tree.keys.length - rootKeys.length;
@@ -179,7 +247,20 @@ export default function KeyBrowser({
   useEffect(() => {
     setExpanded(new Set());
     setFolderLimits({});
+    setPendingDelete(null);
   }, [treeScope]);
+
+  useEffect(() => {
+    if (!pendingDelete && !pendingFolderDelete) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPendingDelete(null);
+        setPendingFolderDelete(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pendingDelete, pendingFolderDelete]);
 
   useEffect(() => {
     if (!autoExpand || folderPaths.length === 0) return;
@@ -309,6 +390,9 @@ export default function KeyBrowser({
             onToggle={toggle}
             selectedKey={selectedKey}
             onSelect={onSelect}
+            onRequestDelete={setPendingDelete}
+            onRefreshFolder={onRefreshFolder}
+            onRequestDeleteFolder={setPendingFolderDelete}
             limits={folderLimits}
             onShowMore={showMore}
           />
@@ -321,6 +405,7 @@ export default function KeyBrowser({
             depth={0}
             selectedKey={selectedKey}
             onSelect={onSelect}
+            onRequestDelete={setPendingDelete}
           />
         ))}
 
@@ -359,6 +444,86 @@ export default function KeyBrowser({
           </svg>
         </button>
       </div>
+
+      {pendingDelete && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPendingDelete(null);
+          }}
+        >
+          <div className="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-key-title">
+            <div className="modal-head">
+              <div>
+                <h2 id="delete-key-title">{t("delete")}</h2>
+                <p>{t("deleteKeyConfirm", { key: pendingDelete })}</p>
+              </div>
+              <button type="button" className="icon-btn" title={t("close")} onClick={() => setPendingDelete(null)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="btn btn-ghost" onClick={() => setPendingDelete(null)} autoFocus>
+                {t("cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  const key = pendingDelete;
+                  setPendingDelete(null);
+                  onDeleteKey(key);
+                }}
+              >
+                {t("confirmDelete")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingFolderDelete && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPendingFolderDelete(null);
+          }}
+        >
+          <div className="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-folder-title">
+            <div className="modal-head">
+              <div>
+                <h2 id="delete-folder-title">{t("deleteFolder")}</h2>
+                <p>
+                  {t("deleteFolderConfirm", { path: pendingFolderDelete })}
+                </p>
+              </div>
+              <button type="button" className="icon-btn" title={t("close")} onClick={() => setPendingFolderDelete(null)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="btn btn-ghost" onClick={() => setPendingFolderDelete(null)} autoFocus>
+                {t("cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  const path = pendingFolderDelete;
+                  setPendingFolderDelete(null);
+                  onDeleteFolder(path);
+                }}
+              >
+                {t("confirmDelete")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

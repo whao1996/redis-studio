@@ -368,6 +368,56 @@ func (s *RedisService) DeleteSavedConnection(id string) error {
 	return s.profiles.remove(id)
 }
 
+// DeleteNamespace 删除某个目录前缀下的全部键，返回删除数量。
+func (s *RedisService) DeleteNamespace(id string, db int, prefix string) (int64, error) {
+	entry, err := s.entry(id)
+	if err != nil {
+		return 0, err
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return 0, newAppError("keyRequired")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), scanAllTimeout)
+	defer cancel()
+
+	client := entry.client(db)
+	pattern := escapeRedisGlob(prefix) + ":*"
+	var cursor uint64
+	var removed int64
+	for {
+		keys, next, scanErr := client.Scan(ctx, cursor, pattern, 1000).Result()
+		if scanErr != nil {
+			return removed, scanErr
+		}
+		if len(keys) > 0 {
+			count, unlinkErr := client.Unlink(ctx, keys...).Result()
+			if unlinkErr != nil {
+				return removed, unlinkErr
+			}
+			removed += count
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return removed, nil
+}
+
+func escapeRedisGlob(value string) string {
+	var builder strings.Builder
+	for _, char := range value {
+		switch char {
+		case '\\', '*', '?', '[', ']':
+			builder.WriteByte('\\')
+		}
+		builder.WriteRune(char)
+	}
+	return builder.String()
+}
+
 // ListDatabases 返回数据库列表及各自 key 数量。
 func (s *RedisService) ListDatabases(id string) ([]DatabaseInfo, error) {
 	entry, err := s.entry(id)

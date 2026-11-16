@@ -90,6 +90,29 @@ func TestScanAllKeys(t *testing.T) {
 	}
 }
 
+func TestDeleteNamespace(t *testing.T) {
+	svc, mr, id := startService(t)
+	mr.Set("app:1", "a")
+	mr.Set("app:2", "b")
+	mr.Set("app:nested:1", "c")
+	mr.Set("apple:1", "keep")
+	mr.Set("other:1", "keep")
+
+	removed, err := svc.DeleteNamespace(id, 0, "app")
+	if err != nil {
+		t.Fatalf("delete namespace: %v", err)
+	}
+	if removed != 3 {
+		t.Fatalf("expected 3 removed keys, got %d", removed)
+	}
+	if mr.Exists("app:1") || mr.Exists("app:nested:1") {
+		t.Fatal("namespace keys should be removed")
+	}
+	if !mr.Exists("apple:1") || !mr.Exists("other:1") {
+		t.Fatal("unrelated keys should remain")
+	}
+}
+
 func TestCollectionValues(t *testing.T) {
 	svc, mr, id := startService(t)
 

@@ -35,6 +35,13 @@ export function DeleteKey(id: string, db: number, key: string): $CancellableProm
 }
 
 /**
+ * DeleteNamespace 删除某个目录前缀下的全部键，返回删除数量。
+ */
+export function DeleteNamespace(id: string, db: number, prefix: string): $CancellablePromise<number> {
+    return $Call.ByID(669893552, id, db, prefix);
+}
+
+/**
  * DeleteSavedConnection 删除已保存的连接；若当前已连接则一并断开。
  */
 export function DeleteSavedConnection(id: string): $CancellablePromise<void> {
