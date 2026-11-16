@@ -13,6 +13,37 @@ interface Props {
   onSubmit: (form: ConnectionForm) => void;
 }
 
+function parseConnectionURI(raw: string): Partial<ConnectionForm> | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "redis:" && url.protocol !== "rediss:") return null;
+
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (!host) return null;
+
+  const port = url.port === "" ? 6379 : Number(url.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+
+  const dbText = url.pathname.replace(/^\//, "").split("/")[0];
+  const db = dbText === "" ? 0 : Number(dbText);
+  if (!Number.isInteger(db) || db < 0) return null;
+
+  let username = "";
+  let password = "";
+  try {
+    username = decodeURIComponent(url.username);
+    password = decodeURIComponent(url.password);
+  } catch {
+    return null;
+  }
+
+  return { host, port, username, password, db, useTLS: url.protocol === "rediss:" };
+}
+
 const EMPTY_FORM: ConnectionForm = {
   name: "",
   group: "",
@@ -27,11 +58,15 @@ const EMPTY_FORM: ConnectionForm = {
 export default function ConnectionModal({ open, busy, error, mode, initial, groups = [], onClose, onSubmit }: Props) {
   const { t } = useSettings();
   const [form, setForm] = useState<ConnectionForm>(EMPTY_FORM);
+  const [uri, setUri] = useState("");
+  const [uriError, setUriError] = useState<string | null>(null);
   const isEdit = mode === "edit";
 
   useEffect(() => {
     if (!open) return;
     setForm(initial ? { ...EMPTY_FORM, ...initial } : EMPTY_FORM);
+    setUri("");
+    setUriError(null);
     // 只在打开时按初始值填充，避免父组件重渲染时覆盖用户输入。
   }, [open]);
 
@@ -85,12 +120,42 @@ export default function ConnectionModal({ open, busy, error, mode, initial, grou
 
         <div className="modal-body">
           <label className="field">
+            <span>{t("connectionURI")}</span>
+            <input
+              type="password"
+              value={uri}
+              onChange={(event) => {
+                const value = event.target.value;
+                setUri(value);
+                const trimmed = value.trim();
+                if (trimmed === "") {
+                  setUriError(null);
+                  return;
+                }
+                const parsed = parseConnectionURI(trimmed);
+                if (parsed) {
+                  setUriError(null);
+                  setForm((prev) => ({ ...prev, ...parsed, name: `${parsed.host}:${parsed.port}` }));
+                } else {
+                  setUriError(trimmed.includes("://") ? t("connectionURIInvalid") : null);
+                }
+              }}
+              placeholder="redis://default:password@host:6379/0"
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <span className={"field-hint" + (uriError ? " err" : "")}>
+              {uriError ?? t("connectionURIHint")}
+            </span>
+          </label>
+
+          <label className="field">
             <span>{t("name")}</span>
             <input
               value={form.name}
               onChange={(event) => update("name", event.target.value)}
               placeholder={t("namePlaceholder")}
-              autoFocus
             />
           </label>
 

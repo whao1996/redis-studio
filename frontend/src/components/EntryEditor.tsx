@@ -353,7 +353,7 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
         </p>
       )}
 
-      <div className="add-bar">
+      <div className={`add-bar ${type}`}>
         <input
           className="bar-input"
           value={newA}
@@ -369,7 +369,7 @@ export default function EntryEditor({ type, entries, length, truncated, onEdit }
         />
         {secondLabel && (
           <input
-            className="bar-input narrow"
+            className="bar-input"
             value={newB}
             placeholder={secondLabel}
             spellCheck={false}

@@ -1101,6 +1101,13 @@ body.is-resizing-panes * {
   gap: 9px;
   padding: 14px 16px 12px;
   border-bottom: 1px solid var(--border);
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.value-head button {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .value-title {
@@ -1430,6 +1437,26 @@ body.is-resizing-panes * {
 
 .bar-input.narrow {
   flex: 0 0 84px;
+}
+
+.add-bar.hash,
+.add-bar.zset {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr) 94px;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 0 12px;
+}
+
+.add-bar.hash .bar-input,
+.add-bar.zset .bar-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.add-bar.hash .btn,
+.add-bar.zset .btn {
+  justify-self: end;
 }
 
 .bar-input.wide {
@@ -2036,6 +2063,16 @@ body.is-resizing-panes * {
 .field input::placeholder {
   color: var(--muted-2);
 }
+.field-hint {
+  color: var(--muted-2);
+  font-size: calc(10.5px * var(--font-scale));
+  line-height: 1.45;
+}
+
+.field-hint.err {
+  color: #ff9498;
+}
+
 
 .field select,
 .field textarea {
@@ -2043,7 +2080,7 @@ body.is-resizing-panes * {
   padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background-color: rgba(8, 11, 16, 0.6);
+  background-color: var(--bg-input);
   font-size: calc(12.5px * var(--font-scale));
   color: var(--text);
   transition: border-color 120ms ease;
