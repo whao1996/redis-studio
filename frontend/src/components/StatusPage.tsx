@@ -151,6 +151,7 @@ export default function StatusPage({ id }: Props) {
   const roleLabel =
     status.role === "master" ? t("statusRoleMaster") : status.role ? t("statusRoleReplica") : "—";
   const healthy = status.masterLinkStatus !== "down";
+  const detailAddress = status.address.replace(/^(cluster|sentinel)\s*·\s*/i, "");
 
   const totalKeys = status.databases.reduce((sum, database) => sum + database.keys, 0);
   const totalExpires = status.databases.reduce((sum, database) => sum + database.expires, 0);
@@ -169,12 +170,19 @@ export default function StatusPage({ id }: Props) {
   const commandPct = (calls: number) => (commandTotal > 0 ? (calls / commandTotal) * 100 : 0);
   const pctLabel = (value: number) => (value > 0 && value < 1 ? "<1%" : `${Math.round(value)}%`);
   const slowRows = status.slowQueries.slice(0, 3);
+  const clusterNodes = status.clusterNodes ?? [];
+  const kbps = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return "0 kb/s";
+    const maximumFractionDigits = value < 10 ? 2 : value < 100 ? 1 : 0;
+    return `${new Intl.NumberFormat(locale, { maximumFractionDigits }).format(value)} kb/s`;
+  };
 
   return (
     <div className="status-page">
       <div className="status-head">
         <div className="status-head-left">
           <h2>{status.name || status.address}</h2>
+          <span className="status-chip status-mode-chip">{status.mode || "—"}</span>
           <span className="status-chip">{roleLabel}</span>
           <span className="status-chip">Redis {status.version || "—"}</span>
           <span className="status-uptime">
@@ -182,6 +190,42 @@ export default function StatusPage({ id }: Props) {
           </span>
         </div>
         <div className="status-head-right">
+          <span className="status-auto-refresh">{t("statusAutoRefresh")}</span>
+          <div className="status-info-wrap">
+            <button
+              type="button"
+              className="icon-btn status-info-btn"
+              title={t("statusDetails")}
+              aria-label={t("statusDetails")}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 11v6" />
+                <path d="M12 7.5h.01" />
+              </svg>
+            </button>
+            <div className="status-info-popover" role="tooltip">
+              <div className="status-info-title" title={detailAddress}>{detailAddress}</div>
+              <div className="status-info-sub" title={status.os || "—"}>{status.os || "—"}</div>
+              <div className="status-info-divider" />
+              <div className="status-info-row">
+                <span>{t("statusProcessID")}</span>
+                <strong>{status.processID > 0 ? status.processID : "—"}</strong>
+              </div>
+              <div className="status-info-row">
+                <span>{t("statusTotalCommands")}</span>
+                <strong>{num(status.totalCommandsProcessed)}</strong>
+              </div>
+              <div className="status-info-row">
+                <span>{t("statusTotalConnections")}</span>
+                <strong>{num(status.totalConnectionsReceived)}</strong>
+              </div>
+              <div className="status-info-row">
+                <span>{t("statusRejectedConnections")}</span>
+                <strong>{num(status.rejectedConnections)}</strong>
+              </div>
+            </div>
+          </div>
           <div className={"status-health" + (healthy ? "" : " degraded")}>
             <span className="status-health-dot" />
             {t(healthy ? "statusHealthy" : "statusUnhealthy")}
@@ -232,6 +276,44 @@ export default function StatusPage({ id }: Props) {
           })}
         />
       </div>
+
+      {clusterNodes.length > 0 && (
+        <section className="status-panel analysis-table-panel cluster-nodes-panel">
+          <div className="analysis-head">
+            <h3>{t("statusClusterMasters", { count: clusterNodes.length })}</h3>
+          </div>
+          <div className="analysis-table-wrap">
+            <table className="analysis-table cluster-node-table">
+              <thead>
+                <tr>
+                  <th>{t("statusClusterNode")}</th>
+                  <th className="num">{t("statusCommandsPerSec")}</th>
+                  <th className="num">{t("statusNetworkInput")}</th>
+                  <th className="num">{t("statusNetworkOutput")}</th>
+                  <th className="num">{t("statusTotalMemory")}</th>
+                  <th className="num">{t("statusTotalKeys")}</th>
+                  <th className="num">{t("statusClusterClients")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {clusterNodes.map((node) => (
+                  <tr key={node.address}>
+                    <td className="cluster-node-cell">
+                      <span className="cluster-node-address">{node.address}</span>
+                    </td>
+                    <td className="num">{num(node.commandsPerSec)}</td>
+                    <td className="num">{kbps(node.networkInputKB)}</td>
+                    <td className="num">{kbps(node.networkOutputKB)}</td>
+                    <td className="num">{formatBytes(node.usedMemory)}</td>
+                    <td className="num">{node.keys >= 0 ? num(node.keys) : "—"}</td>
+                    <td className="num">{num(node.clients)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <div className="status-columns">
         <Panel title={t("statusMemoryKeys")}>
@@ -328,14 +410,6 @@ export default function StatusPage({ id }: Props) {
             })}
           </p>
         </Panel>
-      </div>
-
-      <div className="status-foot">
-        {t("statusMode")}: {status.mode || "—"} · {t("statusOS")}: {status.os || "—"} ·{" "}
-        {t("statusProcessID")}: {status.processID > 0 ? status.processID : "—"} ·{" "}
-        {t("statusTotalCommands")}: {num(status.totalCommandsProcessed)} ·{" "}
-        {t("statusTotalConnections")}: {num(status.totalConnectionsReceived)} ·{" "}
-        {t("statusRejectedConnections")}: {num(status.rejectedConnections)} · {t("statusAutoRefresh")}
       </div>
     </div>
   );

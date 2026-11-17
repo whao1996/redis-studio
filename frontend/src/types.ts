@@ -5,8 +5,8 @@ export interface ConnectionForm {
   port: number;
   username: string;
   password: string;
-  db: number;
   useTLS: boolean;
+  cluster: boolean;
   profileID?: string;
 }
 
@@ -18,8 +18,8 @@ export interface SavedConnection {
   port: number;
   username: string;
   password: string;
-  db: number;
   useTLS: boolean;
+  cluster?: boolean;
 }
 
 export interface SidebarConnection {
@@ -134,6 +134,17 @@ export interface CommandResult {
   errorCode: string;
 }
 
+export interface ClusterNodeStatus {
+  address: string;
+  role: string;
+  commandsPerSec: number;
+  networkInputKB: number;
+  networkOutputKB: number;
+  usedMemory: number;
+  keys: number;
+  clients: number;
+}
+
 export interface InstanceStatus {
   name: string;
   address: string;
@@ -178,6 +189,7 @@ export interface InstanceStatus {
   slowlogThresholdMs: number;
   slowlogCount: number;
   databases: DatabaseStatus[];
+  clusterNodes: ClusterNodeStatus[];
 }
 
 export interface SubscriptionInfo {

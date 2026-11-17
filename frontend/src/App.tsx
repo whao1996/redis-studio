@@ -388,8 +388,8 @@ export default function App() {
         port: form.port,
         username: form.username,
         password: form.password,
-        db: form.db,
         useTLS: form.useTLS,
+        cluster: form.cluster,
       });
       await refreshSaved();
       setModalOpen(false);
@@ -439,8 +439,8 @@ export default function App() {
         port: profile.port,
         username: profile.username,
         password: profile.password,
-        db: profile.db,
         useTLS: profile.useTLS,
+        cluster: profile.cluster ?? false,
       });
       setConnections((prev) => [...prev.filter((conn) => conn.id !== info.id), info]);
       await refreshSaved();
@@ -651,11 +651,12 @@ export default function App() {
 
   const sidebarConnections: SidebarConnection[] = saved.map((profile) => {
     const active = connections.find((conn) => conn.id === profile.id);
+    const address = active?.address ?? (profile.cluster ? `${t("clusterMode")} · ${profile.host}:${profile.port}` : `${profile.host}:${profile.port}`);
     return {
       id: profile.id,
       name: profile.name || `${profile.host}:${profile.port}`,
       group: profile.group ?? "",
-      address: `${profile.host}:${profile.port}`,
+      address,
       version: active?.version ?? "",
       connected: Boolean(active),
     };
@@ -932,8 +933,8 @@ export default function App() {
                 port: editing.port,
                 username: editing.username,
                 password: editing.password,
-                db: editing.db,
                 useTLS: editing.useTLS,
+                cluster: editing.cluster ?? false,
               }
             : null
         }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { entryHeaders } from "../entryHeaders";
 import { formatBytes, formatTTL, isJSONType, isModuleType, typeLabel } from "../format";
 import type { TranslationKey } from "../i18n";
@@ -24,6 +24,130 @@ interface Props {
   onUpdateTTL: (ttlSeconds: number) => Promise<boolean>;
   onDelete: () => void;
   onRefresh: () => void;
+}
+
+type TextMatch = { start: number; end: number };
+
+interface HighlightRegistry {
+  set(name: string, highlight: unknown): void;
+  delete(name: string): void;
+}
+
+function findTextMatches(text: string, query: string): TextMatch[] {
+  const needle = query.toLocaleLowerCase();
+  if (!needle) return [];
+  const haystack = text.toLocaleLowerCase();
+  const matches: TextMatch[] = [];
+  let from = 0;
+  while (from <= haystack.length - needle.length) {
+    const index = haystack.indexOf(needle, from);
+    if (index < 0) break;
+    matches.push({ start: index, end: index + needle.length });
+    from = index + Math.max(needle.length, 1);
+  }
+  return matches;
+}
+
+function getHighlightApi() {
+  const registry =
+    typeof CSS === "undefined"
+      ? undefined
+      : (CSS as unknown as { highlights?: HighlightRegistry }).highlights;
+  const HighlightCtor = (window as unknown as {
+    Highlight?: new (...ranges: Range[]) => unknown;
+  }).Highlight;
+  if (!registry || !HighlightCtor) return null;
+  return {
+    registry,
+    create: (...ranges: Range[]) => new HighlightCtor(...ranges),
+  };
+}
+
+function clearSearchHighlights() {
+  const api = getHighlightApi();
+  api?.registry.delete("value-search");
+  api?.registry.delete("value-search-active");
+}
+
+function applySearchHighlights(ranges: Range[], active: number) {
+  const api = getHighlightApi();
+  if (!api) {
+    const range = ranges[active];
+    if (!range) return;
+    const selection = window.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return;
+  }
+
+  api.registry.delete("value-search");
+  api.registry.delete("value-search-active");
+  const activeRange = ranges[active];
+  if (activeRange) api.registry.set("value-search-active", api.create(activeRange));
+  const others = ranges.filter((_, index) => index !== active);
+  if (others.length > 0) api.registry.set("value-search", api.create(...others));
+}
+
+function collectSearchRanges(root: HTMLElement, query: string): Range[] {
+  const ranges: Range[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const needle = query.toLocaleLowerCase();
+  if (!needle) return ranges;
+
+  let node = walker.nextNode();
+  while (node) {
+    const parent = node.parentElement;
+    const text = node.nodeValue ?? "";
+    if (
+      parent &&
+      text &&
+      !parent.closest("textarea, input, select, button, script, style, [aria-hidden='true']")
+    ) {
+      const style = window.getComputedStyle(parent);
+      if (style.display !== "none" && style.visibility !== "hidden") {
+        const haystack = text.toLocaleLowerCase();
+        let from = 0;
+        while (from <= haystack.length - needle.length) {
+          const index = haystack.indexOf(needle, from);
+          if (index < 0) break;
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + needle.length);
+          ranges.push(range);
+          from = index + Math.max(needle.length, 1);
+        }
+      }
+    }
+    node = walker.nextNode();
+  }
+  return ranges;
+}
+
+function scrollRangeIntoView(range: Range, root: HTMLElement) {
+  const element = range.startContainer.parentElement;
+  if (!element) return;
+
+  let scroller: HTMLElement | null = element;
+  while (scroller && scroller !== root) {
+    const style = window.getComputedStyle(scroller);
+    if (
+      /(auto|scroll)/.test(style.overflowY) &&
+      scroller.scrollHeight > scroller.clientHeight + 1
+    ) {
+      break;
+    }
+    scroller = scroller.parentElement;
+  }
+  if (!scroller || scroller === root) return;
+
+  const rect = range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return;
+  const box = scroller.getBoundingClientRect();
+  if (rect.top < box.top + 8 || rect.bottom > box.bottom - 8) {
+    scroller.scrollTop +=
+      rect.top - box.top - scroller.clientHeight / 2 + rect.height / 2;
+  }
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -62,6 +186,17 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
   const [ttlBusy, setTTLBusy] = useState(false);
   const [ttlError, setTTLError] = useState<string | null>(null);
   const [jsonPreview, setJsonPreview] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchCount, setSearchCount] = useState(0);
+  const [searchIndex, setSearchIndex] = useState(0);
+  const [searchTick, setSearchTick] = useState(0);
+  const panelRef = useRef<HTMLElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchRangesRef = useRef<Range[]>([]);
+  const searchTextHitsRef = useRef<TextMatch[] | null>(null);
+  const searchTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const searchIndexRef = useRef(0);
 
   useEffect(() => {
     setDraft(value?.value ?? "");
@@ -78,7 +213,99 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
     setTTLBusy(false);
     setTTLError(null);
     setJsonPreview(null);
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSearchCount(0);
+    setSearchIndex(0);
+    searchRangesRef.current = [];
+    searchTextHitsRef.current = null;
+    searchTextareaRef.current = null;
+    searchIndexRef.current = 0;
+    clearSearchHighlights();
   }, [value]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const frame = requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [searchOpen]);
+
+  useEffect(() => () => clearSearchHighlights(), []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!value) return;
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [value]);
+
+  useEffect(() => {
+    if (!searchOpen || !searchQuery) return;
+    const body = panelRef.current?.querySelector<HTMLElement>(".value-body");
+    if (!body) return;
+
+    let frame = 0;
+    const observer = new MutationObserver(() => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        setSearchTick((current) => current + 1);
+      });
+    });
+    observer.observe(body, { childList: true, subtree: true, characterData: true });
+    return () => {
+      observer.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [searchOpen, searchQuery, value, jsonEditing]);
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    clearSearchHighlights();
+    searchRangesRef.current = [];
+    searchTextHitsRef.current = null;
+    searchTextareaRef.current = null;
+    searchIndexRef.current = 0;
+
+    if (!searchOpen || !searchQuery || !panel) {
+      setSearchCount(0);
+      setSearchIndex(0);
+      return;
+    }
+
+    const body = panel.querySelector<HTMLElement>(".value-body");
+    if (!body) {
+      setSearchCount(0);
+      setSearchIndex(0);
+      return;
+    }
+
+    const textarea = body.querySelector<HTMLTextAreaElement>(
+      "textarea.value-editor, textarea.json-source-input"
+    );
+    if (textarea) {
+      const matches = findTextMatches(textarea.value, searchQuery);
+      searchTextareaRef.current = textarea;
+      searchTextHitsRef.current = matches;
+      setSearchCount(matches.length);
+      setSearchIndex(0);
+      return;
+    }
+
+    const ranges = collectSearchRanges(body, searchQuery);
+    searchRangesRef.current = ranges;
+    setSearchCount(ranges.length);
+    setSearchIndex(0);
+    if (ranges.length > 0) {
+      applySearchHighlights(ranges, 0);
+      scrollRangeIntoView(ranges[0], panel);
+    }
+  }, [searchOpen, searchQuery, searchTick, value, draft, jsonEditing, ttlEditing, confirming]);
 
   const draftJson = useMemo(
     () => (value?.type === "string" ? prettyJson(draft) : null),
@@ -213,8 +440,43 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
     if (ok) setTTLEditing(false);
   };
 
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSearchCount(0);
+    setSearchIndex(0);
+    searchRangesRef.current = [];
+    searchTextHitsRef.current = null;
+    searchTextareaRef.current = null;
+    searchIndexRef.current = 0;
+    clearSearchHighlights();
+  };
+
+  const navigateSearch = (delta: number) => {
+    if (searchCount === 0) return;
+    const next = (searchIndexRef.current + delta + searchCount) % searchCount;
+    searchIndexRef.current = next;
+    setSearchIndex(next);
+
+    const textarea = searchTextareaRef.current;
+    const textHits = searchTextHitsRef.current;
+    if (textarea && textHits) {
+      const hit = textHits[next];
+      if (!hit) return;
+      textarea.focus();
+      textarea.setSelectionRange(hit.start, hit.end);
+      return;
+    }
+
+    const ranges = searchRangesRef.current;
+    const panel = panelRef.current;
+    if (!panel || !ranges[next]) return;
+    applySearchHighlights(ranges, next);
+    scrollRangeIntoView(ranges[next], panel);
+  };
+
   return (
-    <aside className="value-panel">
+    <aside className="value-panel" ref={panelRef}>
       <div className="value-head">
         <div className="value-title">
           <span className="value-key" title={value.key}>
@@ -267,6 +529,21 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
               {t("edit")}
             </button>
           )}
+          <button
+            type="button"
+            className={"icon-btn value-search-toggle" + (searchOpen ? " active" : "")}
+            title={t("searchValue")}
+            aria-pressed={searchOpen}
+            onClick={() => {
+              if (searchOpen) closeSearch();
+              else setSearchOpen(true);
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+          </button>
           <button type="button" className="icon-btn" title={t("refresh")} onClick={onRefresh}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -278,6 +555,79 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
           </button>
         </div>
       </div>
+
+      {searchOpen && (
+        <div className="value-search-bar" role="search">
+          <svg className="value-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
+          </svg>
+          <input
+            ref={searchInputRef}
+            className="value-search-input"
+            value={searchQuery}
+            placeholder={t("valueSearchPlaceholder")}
+            aria-label={t("searchValue")}
+            spellCheck={false}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setSearchIndex(0);
+              searchIndexRef.current = 0;
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                navigateSearch(event.shiftKey ? -1 : 1);
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeSearch();
+              }
+            }}
+          />
+          <span
+            className={"value-search-count" + (searchQuery && searchCount === 0 ? " empty" : "")}
+            aria-live="polite"
+          >
+            {searchQuery ? (searchCount > 0 ? `${searchIndex + 1}/${searchCount}` : t("noMatches")) : ""}
+          </span>
+          <button
+            type="button"
+            className="icon-btn"
+            title={t("previousMatch")}
+            aria-label={t("previousMatch")}
+            disabled={searchCount === 0}
+            onClick={() => navigateSearch(-1)}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="m18 15-6-6-6 6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title={t("nextMatch")}
+            aria-label={t("nextMatch")}
+            disabled={searchCount === 0}
+            onClick={() => navigateSearch(1)}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title={t("closeSearch")}
+            aria-label={t("closeSearch")}
+            onClick={closeSearch}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       {ttlEditing && (
         <div className="ttl-edit-bar">
@@ -405,7 +755,11 @@ export default function ValuePanel({ value, loading, onSave, onEdit, onUpdateTTL
           </div>
         ) : (
           <div className="value-body json-body">
-            <JsonTreeView text={draft} className="json-view" />
+            <JsonTreeView
+              text={draft}
+              className="json-view"
+              expandAll={searchOpen && searchQuery.length > 0}
+            />
             <div className="json-foot">
               <span className="muted">
                 {t("chars", { count: draft.length })} · {t("previewOnly")}

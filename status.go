@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -36,6 +37,17 @@ type SlowLogData struct {
 	ThresholdMs float64     `json:"thresholdMs"`
 	MaxLen      int64       `json:"maxLen"`
 	Total       int64       `json:"total"`
+}
+
+type ClusterNodeStatus struct {
+	Address         string  `json:"address"`
+	Role            string  `json:"role"`
+	CommandsPerSec  int64   `json:"commandsPerSec"`
+	NetworkInputKB  float64 `json:"networkInputKB"`
+	NetworkOutputKB float64 `json:"networkOutputKB"`
+	UsedMemory      int64   `json:"usedMemory"`
+	Keys            int64   `json:"keys"`
+	Clients         int64   `json:"clients"`
 }
 
 type InstanceStatus struct {
@@ -89,7 +101,8 @@ type InstanceStatus struct {
 	SlowlogThresholdMs float64     `json:"slowlogThresholdMs"`
 	SlowlogCount       int64       `json:"slowlogCount"`
 
-	Databases []DatabaseStatus `json:"databases"`
+	Databases    []DatabaseStatus    `json:"databases"`
+	ClusterNodes []ClusterNodeStatus `json:"clusterNodes"`
 }
 
 // GetSlowLog 返回慢日志条目、阈值、容量上限和累计条数。
@@ -169,7 +182,7 @@ func (s *RedisService) GetInstanceStatus(id string) (InstanceStatus, error) {
 		return InstanceStatus{}, err
 	}
 
-	status := parseInstanceStatus(info, client.Options().Addr)
+	status := parseInstanceStatus(info, connectionDisplayAddress(entry.cfg))
 	status.Name = entry.cfg.Name
 	if status.Name == "" {
 		status.Name = status.Address
@@ -182,6 +195,10 @@ func (s *RedisService) GetInstanceStatus(id string) (InstanceStatus, error) {
 		status.SlowlogCount = count
 	}
 
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		status.ClusterNodes = collectClusterNodeStatuses(ctx, cluster)
+	}
+
 	status.SlowlogThresholdMs = 10
 	if config, configErr := client.ConfigGet(ctx, "slowlog-log-slower-than").Result(); configErr == nil {
 		if raw, ok := config["slowlog-log-slower-than"]; ok {
@@ -192,6 +209,37 @@ func (s *RedisService) GetInstanceStatus(id string) (InstanceStatus, error) {
 	}
 
 	return status, nil
+}
+
+func collectClusterNodeStatuses(ctx context.Context, cluster *redis.ClusterClient) []ClusterNodeStatus {
+	var mu sync.Mutex
+	nodes := make([]ClusterNodeStatus, 0)
+	_ = cluster.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+		info, err := node.Info(ctx, "all").Result()
+		if err != nil {
+			return nil
+		}
+		values := parseInfoMap(info)
+		keys, keyErr := node.DBSize(ctx).Result()
+		if keyErr != nil {
+			keys = -1
+		}
+		mu.Lock()
+		nodes = append(nodes, ClusterNodeStatus{
+			Address:         node.Options().Addr,
+			Role:            values["role"],
+			CommandsPerSec:  infoInt(values, "instantaneous_ops_per_sec"),
+			NetworkInputKB:  infoFloat(values, "instantaneous_input_kbps"),
+			NetworkOutputKB: infoFloat(values, "instantaneous_output_kbps"),
+			UsedMemory:      infoInt(values, "used_memory"),
+			Keys:            keys,
+			Clients:         infoInt(values, "connected_clients"),
+		})
+		mu.Unlock()
+		return nil
+	})
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Address < nodes[j].Address })
+	return nodes
 }
 
 func parseInstanceStatus(raw string, address string) InstanceStatus {
@@ -467,47 +515,69 @@ func (s *RedisService) GetKeyAnalysis(connectionID string, db int, topN int) (Ke
 	seen := make(map[string]struct{})
 	items := make([]KeyAnalysisItem, 0)
 
-	cursor := uint64(0)
-	for {
-		keys, next, scanErr := client.Scan(ctx, cursor, "*", 500).Result()
-		if scanErr != nil {
-			return KeyAnalysis{}, scanErr
-		}
-
-		if len(keys) > 0 {
-			batch := analyzeKeys(ctx, client, keys)
-			for _, item := range batch {
-				if _, duplicate := seen[item.Key]; duplicate {
-					continue
-				}
-				seen[item.Key] = struct{}{}
-				items = append(items, item)
-				result.TotalKeys++
-				result.TotalMemory += item.Size
-
-				summary := typeAgg[item.Type]
-				if summary == nil {
-					summary = &TypeSummary{Type: item.Type}
-					typeAgg[item.Type] = summary
-				}
-				summary.Keys++
-				summary.Memory += item.Size
-
-				namespace := namespaceOf(item.Key)
-				aggregate := nsAgg[namespace]
-				if aggregate == nil {
-					aggregate = &namespaceAggregate{types: make(map[string]struct{})}
-					nsAgg[namespace] = aggregate
-				}
-				aggregate.keys++
-				aggregate.memory += item.Size
-				aggregate.types[item.Type] = struct{}{}
+	addBatch := func(batch []KeyAnalysisItem) {
+		for _, item := range batch {
+			if _, duplicate := seen[item.Key]; duplicate {
+				continue
 			}
-		}
+			seen[item.Key] = struct{}{}
+			items = append(items, item)
+			result.TotalKeys++
+			result.TotalMemory += item.Size
 
-		cursor = next
-		if cursor == 0 {
-			break
+			summary := typeAgg[item.Type]
+			if summary == nil {
+				summary = &TypeSummary{Type: item.Type}
+				typeAgg[item.Type] = summary
+			}
+			summary.Keys++
+			summary.Memory += item.Size
+
+			namespace := namespaceOf(item.Key)
+			aggregate := nsAgg[namespace]
+			if aggregate == nil {
+				aggregate = &namespaceAggregate{types: make(map[string]struct{})}
+				nsAgg[namespace] = aggregate
+			}
+			aggregate.keys++
+			aggregate.memory += item.Size
+			aggregate.types[item.Type] = struct{}{}
+		}
+	}
+
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		var mu sync.Mutex
+		if err := cluster.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+			var cursor uint64
+			for {
+				keys, next, scanErr := node.Scan(ctx, cursor, "*", 500).Result()
+				if scanErr != nil {
+					return scanErr
+				}
+				mu.Lock()
+				addBatch(analyzeKeys(ctx, node, keys))
+				mu.Unlock()
+				cursor = next
+				if cursor == 0 {
+					break
+				}
+			}
+			return nil
+		}); err != nil {
+			return KeyAnalysis{}, err
+		}
+	} else {
+		cursor := uint64(0)
+		for {
+			keys, next, scanErr := client.Scan(ctx, cursor, "*", 500).Result()
+			if scanErr != nil {
+				return KeyAnalysis{}, scanErr
+			}
+			addBatch(analyzeKeys(ctx, client, keys))
+			cursor = next
+			if cursor == 0 {
+				break
+			}
 		}
 	}
 
@@ -585,7 +655,7 @@ func truncateItems(items []KeyAnalysisItem, limit int) []KeyAnalysisItem {
 	return items
 }
 
-func analyzeKeys(ctx context.Context, client *redis.Client, keys []string) []KeyAnalysisItem {
+func analyzeKeys(ctx context.Context, client redis.UniversalClient, keys []string) []KeyAnalysisItem {
 	items := make([]KeyAnalysisItem, len(keys))
 
 	pipeline := client.Pipeline()

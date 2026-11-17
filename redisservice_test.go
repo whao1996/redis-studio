@@ -982,3 +982,39 @@ func TestListDatabasesAndDisconnect(t *testing.T) {
 		t.Fatal("expected error after disconnect")
 	}
 }
+
+func TestNormalizeConnectionConfig(t *testing.T) {
+	standalone := ConnectionConfig{Name: "", Host: "127.0.0.1", Port: 0}
+	addrs, err := normalizeConnectionConfig(&standalone)
+	if err != nil {
+		t.Fatalf("normalize standalone: %v", err)
+	}
+	if standalone.Port != 6379 || standalone.Cluster {
+		t.Fatalf("unexpected standalone config: %+v", standalone)
+	}
+	if len(addrs) != 1 || addrs[0] != "127.0.0.1:6379" {
+		t.Fatalf("unexpected standalone addrs: %v", addrs)
+	}
+	if standalone.Name != "127.0.0.1:6379" {
+		t.Fatalf("unexpected standalone name: %q", standalone.Name)
+	}
+
+	cluster := ConnectionConfig{Host: "127.0.0.1", Port: 7001, DB: 3, Cluster: true}
+	addrs, err = normalizeConnectionConfig(&cluster)
+	if err != nil {
+		t.Fatalf("normalize cluster: %v", err)
+	}
+	if cluster.DB != 0 {
+		t.Fatalf("cluster DB should be 0, got %d", cluster.DB)
+	}
+	if len(addrs) != 1 || addrs[0] != "127.0.0.1:7001" {
+		t.Fatalf("unexpected cluster addrs: %v", addrs)
+	}
+	if address := connectionDisplayAddress(cluster); address != "cluster · 127.0.0.1:7001" {
+		t.Fatalf("unexpected cluster address: %q", address)
+	}
+
+	if _, err := normalizeConnectionConfig(&ConnectionConfig{Host: "  "}); err == nil {
+		t.Fatal("expected host required error")
+	}
+}

@@ -19,6 +19,7 @@ type ConnectionProfile struct {
 	Password string `json:"password"`
 	DB       int    `json:"db"`
 	UseTLS   bool   `json:"useTLS"`
+	Cluster  bool   `json:"cluster,omitempty"`
 }
 
 type profileFile struct {

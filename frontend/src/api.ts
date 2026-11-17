@@ -29,8 +29,9 @@ export const api = {
         port: form.port,
         username: form.username,
         password: form.password,
-        db: form.db,
+        db: 0,
         useTLS: form.useTLS,
+        cluster: form.cluster,
         profileID: form.profileID ?? "",
       })
     ),
@@ -54,8 +55,9 @@ export const api = {
         port: profile.port,
         username: profile.username,
         password: profile.password,
-        db: profile.db,
+        db: 0,
         useTLS: profile.useTLS,
+        cluster: profile.cluster ?? false,
       })
     ),
 

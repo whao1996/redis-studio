@@ -28,10 +28,6 @@ function parseConnectionURI(raw: string): Partial<ConnectionForm> | null {
   const port = url.port === "" ? 6379 : Number(url.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
 
-  const dbText = url.pathname.replace(/^\//, "").split("/")[0];
-  const db = dbText === "" ? 0 : Number(dbText);
-  if (!Number.isInteger(db) || db < 0) return null;
-
   let username = "";
   let password = "";
   try {
@@ -41,7 +37,13 @@ function parseConnectionURI(raw: string): Partial<ConnectionForm> | null {
     return null;
   }
 
-  return { host, port, username, password, db, useTLS: url.protocol === "rediss:" };
+  return {
+    host,
+    port,
+    username,
+    password,
+    useTLS: url.protocol === "rediss:",
+  };
 }
 
 const EMPTY_FORM: ConnectionForm = {
@@ -51,8 +53,8 @@ const EMPTY_FORM: ConnectionForm = {
   port: 6379,
   username: "",
   password: "",
-  db: 0,
   useTLS: false,
+  cluster: false,
 };
 
 export default function ConnectionModal({ open, busy, error, mode, initial, groups = [], onClose, onSubmit }: Props) {
@@ -94,9 +96,10 @@ export default function ConnectionModal({ open, busy, error, mode, initial, grou
       group: form.group.trim(),
       host: form.host.trim(),
       port: Number(form.port) || 6379,
-      db: Math.max(0, Number(form.db) || 0),
     });
   };
+
+  const canSubmit = Boolean(form.host.trim());
 
   return (
     <div
@@ -140,7 +143,7 @@ export default function ConnectionModal({ open, busy, error, mode, initial, grou
                   setUriError(trimmed.includes("://") ? t("connectionURIInvalid") : null);
                 }
               }}
-              placeholder="redis://default:password@host:6379/0"
+              placeholder="redis://default:password@host:6379"
               autoFocus
               autoComplete="off"
               spellCheck={false}
@@ -224,14 +227,13 @@ export default function ConnectionModal({ open, busy, error, mode, initial, grou
           </div>
 
           <div className="field-row align-end">
-            <label className="field db">
-              <span>{t("database")}</span>
+            <label className="checkbox">
               <input
-                type="number"
-                min={0}
-                value={form.db}
-                onChange={(event) => update("db", Number(event.target.value))}
+                type="checkbox"
+                checked={form.cluster}
+                onChange={(event) => update("cluster", event.target.checked)}
               />
+              <span>{t("clusterMode")}</span>
             </label>
             <label className="checkbox">
               <input
@@ -250,7 +252,7 @@ export default function ConnectionModal({ open, busy, error, mode, initial, grou
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
             {t("cancel")}
           </button>
-          <button type="submit" className="btn btn-primary" disabled={busy || !form.host.trim()}>
+          <button type="submit" className="btn btn-primary" disabled={busy || !canSubmit}>
             {busy ? (isEdit ? t("saving") : t("connecting")) : isEdit ? t("save") : t("connect")}
           </button>
         </div>

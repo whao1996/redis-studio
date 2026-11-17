@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +41,7 @@ type ConnectionConfig struct {
 	Password  string `json:"password"`
 	DB        int    `json:"db"`
 	UseTLS    bool   `json:"useTLS"`
+	Cluster   bool   `json:"cluster"`
 	ProfileID string `json:"profileID"`
 }
 
@@ -120,10 +123,11 @@ type ValueResult struct {
 }
 
 type connEntry struct {
-	cfg ConnectionConfig
+	cfg   ConnectionConfig
+	addrs []string
 
 	mu      sync.Mutex
-	clients map[int]*redis.Client
+	clients map[int]redis.UniversalClient
 }
 
 type RedisService struct {
@@ -160,10 +164,13 @@ func (e *connEntry) closeAll() {
 	for _, c := range e.clients {
 		_ = c.Close()
 	}
-	e.clients = make(map[int]*redis.Client)
+	e.clients = make(map[int]redis.UniversalClient)
 }
 
-func (e *connEntry) client(db int) *redis.Client {
+func (e *connEntry) client(db int) redis.UniversalClient {
+	if e.cfg.Cluster {
+		db = 0
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -171,20 +178,21 @@ func (e *connEntry) client(db int) *redis.Client {
 		return c
 	}
 
-	opts := &redis.Options{
-		Addr:     fmt.Sprintf("%s:%d", e.cfg.Host, e.cfg.Port),
-		Username: e.cfg.Username,
-		Password: e.cfg.Password,
-		DB:       db,
+	opts := &redis.UniversalOptions{
+		Addrs:         e.addrs,
+		IsClusterMode: e.cfg.Cluster,
+		Username:      e.cfg.Username,
+		Password:      e.cfg.Password,
+		DB:            db,
 	}
 	if e.cfg.UseTLS {
-		opts.TLSConfig = &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			ServerName: e.cfg.Host,
+		opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		if !e.cfg.Cluster {
+			opts.TLSConfig.ServerName = e.cfg.Host
 		}
 	}
 
-	c := redis.NewClient(opts)
+	c := redis.NewUniversalClient(opts)
 	e.clients[db] = c
 	return c
 }
@@ -200,12 +208,12 @@ func (s *RedisService) entry(id string) (*connEntry, error) {
 	return entry, nil
 }
 
-// Connect 建立连接并做一次 PING 校验。
-func (s *RedisService) Connect(cfg ConnectionConfig) (ConnectionInfo, error) {
-	cfg.Host = strings.TrimSpace(cfg.Host)
+func normalizeConnectionConfig(cfg *ConnectionConfig) ([]string, error) {
+	cfg.Name = strings.TrimSpace(cfg.Name)
 	cfg.Group = strings.TrimSpace(cfg.Group)
+	cfg.Host = strings.TrimSpace(cfg.Host)
 	if cfg.Host == "" {
-		return ConnectionInfo{}, newAppError("hostRequired")
+		return nil, newAppError("hostRequired")
 	}
 	if cfg.Port <= 0 || cfg.Port > 65535 {
 		cfg.Port = 6379
@@ -213,11 +221,35 @@ func (s *RedisService) Connect(cfg ConnectionConfig) (ConnectionInfo, error) {
 	if cfg.DB < 0 {
 		cfg.DB = 0
 	}
-	if strings.TrimSpace(cfg.Name) == "" {
-		cfg.Name = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	if cfg.Cluster {
+		cfg.DB = 0
+	}
+	if cfg.Name == "" {
+		cfg.Name = net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	}
+	return []string{net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))}, nil
+}
+
+func connectionDisplayAddress(cfg ConnectionConfig) string {
+	address := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	if cfg.Cluster {
+		return "cluster · " + address
+	}
+	return address
+}
+
+// Connect 建立连接并做一次 PING 校验。
+func (s *RedisService) Connect(cfg ConnectionConfig) (ConnectionInfo, error) {
+	addrs, err := normalizeConnectionConfig(&cfg)
+	if err != nil {
+		return ConnectionInfo{}, err
 	}
 
-	entry := &connEntry{cfg: cfg, clients: make(map[int]*redis.Client)}
+	entry := &connEntry{
+		cfg:     cfg,
+		addrs:   addrs,
+		clients: make(map[int]redis.UniversalClient),
+	}
 	client := entry.client(cfg.DB)
 
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
@@ -257,6 +289,7 @@ func (s *RedisService) Connect(cfg ConnectionConfig) (ConnectionInfo, error) {
 			Password: cfg.Password,
 			DB:       cfg.DB,
 			UseTLS:   cfg.UseTLS,
+			Cluster:  cfg.Cluster,
 		}
 		if err := s.profiles.upsert(profile); err != nil {
 			log.Printf("save connection profile: %v", err)
@@ -266,7 +299,7 @@ func (s *RedisService) Connect(cfg ConnectionConfig) (ConnectionInfo, error) {
 	return ConnectionInfo{
 		ID:      id,
 		Name:    cfg.Name,
-		Address: client.Options().Addr,
+		Address: connectionDisplayAddress(cfg),
 		Version: version,
 	}, nil
 }
@@ -315,20 +348,25 @@ func (s *RedisService) UpdateSavedConnection(profile ConnectionProfile) error {
 		return newAppError("connectionActive")
 	}
 
-	profile.Host = strings.TrimSpace(profile.Host)
-	profile.Group = strings.TrimSpace(profile.Group)
-	if profile.Host == "" {
-		return newAppError("hostRequired")
+	cfg := ConnectionConfig{
+		Name:     profile.Name,
+		Group:    profile.Group,
+		Host:     profile.Host,
+		Port:     profile.Port,
+		Username: profile.Username,
+		Password: profile.Password,
+		DB:       profile.DB,
+		UseTLS:   profile.UseTLS,
+		Cluster:  profile.Cluster,
 	}
-	if profile.Port <= 0 || profile.Port > 65535 {
-		profile.Port = 6379
+	if _, err := normalizeConnectionConfig(&cfg); err != nil {
+		return err
 	}
-	if profile.DB < 0 {
-		profile.DB = 0
-	}
-	if strings.TrimSpace(profile.Name) == "" {
-		profile.Name = fmt.Sprintf("%s:%d", profile.Host, profile.Port)
-	}
+	profile.Name = cfg.Name
+	profile.Group = cfg.Group
+	profile.Host = cfg.Host
+	profile.Port = cfg.Port
+	profile.DB = cfg.DB
 
 	return s.profiles.update(profile)
 }
@@ -384,6 +422,37 @@ func (s *RedisService) DeleteNamespace(id string, db int, prefix string) (int64,
 
 	client := entry.client(db)
 	pattern := escapeRedisGlob(prefix) + ":*"
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		var mu sync.Mutex
+		var removed int64
+		if err := cluster.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+			var cursor uint64
+			for {
+				keys, next, scanErr := node.Scan(ctx, cursor, pattern, 1000).Result()
+				if scanErr != nil {
+					return scanErr
+				}
+				if len(keys) > 0 {
+					count, unlinkErr := node.Unlink(ctx, keys...).Result()
+					if unlinkErr != nil {
+						return unlinkErr
+					}
+					mu.Lock()
+					removed += count
+					mu.Unlock()
+				}
+				cursor = next
+				if cursor == 0 {
+					break
+				}
+			}
+			return nil
+		}); err != nil {
+			return removed, err
+		}
+		return removed, nil
+	}
+
 	var cursor uint64
 	var removed int64
 	for {
@@ -428,8 +497,27 @@ func (s *RedisService) ListDatabases(id string) ([]DatabaseInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
+	client := entry.client(0)
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		var total int64
+		var mu sync.Mutex
+		if err := cluster.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+			keys, dbErr := node.DBSize(ctx).Result()
+			if dbErr != nil {
+				return dbErr
+			}
+			mu.Lock()
+			total += keys
+			mu.Unlock()
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		return []DatabaseInfo{{Index: 0, Keys: total}}, nil
+	}
+
 	count := 16
-	if values, err := entry.client(0).ConfigGet(ctx, "databases").Result(); err == nil {
+	if values, err := client.ConfigGet(ctx, "databases").Result(); err == nil {
 		if n, convErr := strconv.Atoi(values["databases"]); convErr == nil && n > 0 {
 			count = n
 		}
@@ -464,6 +552,116 @@ func (s *RedisService) ListDatabases(id string) ([]DatabaseInfo, error) {
 	return result, nil
 }
 
+type clusterScanState struct {
+	Cursors map[string]uint64 `json:"cursors"`
+	Done    []string          `json:"done,omitempty"`
+}
+
+func encodeClusterScanCursor(state clusterScanState) string {
+	if len(state.Cursors) == 0 {
+		return "0"
+	}
+	if state.Cursors == nil {
+		state.Cursors = make(map[string]uint64)
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return "0"
+	}
+	return "c:" + base64.RawURLEncoding.EncodeToString(data)
+}
+
+func decodeClusterScanCursor(raw string) (clusterScanState, error) {
+	state := clusterScanState{Cursors: make(map[string]uint64)}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "0" {
+		return state, nil
+	}
+	if !strings.HasPrefix(raw, "c:") {
+		return state, newAppError("invalidCursor", "cursor", raw)
+	}
+	data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(raw, "c:"))
+	if err != nil {
+		return state, newAppError("invalidCursor", "cursor", raw)
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return state, newAppError("invalidCursor", "cursor", raw)
+	}
+	if state.Cursors == nil {
+		state.Cursors = make(map[string]uint64)
+	}
+	return state, nil
+}
+
+func scanClusterKeys(
+	ctx context.Context,
+	cluster *redis.ClusterClient,
+	rawCursor string,
+	pattern string,
+	count int,
+) (ScanResult, error) {
+	state, err := decodeClusterScanCursor(rawCursor)
+	if err != nil {
+		return ScanResult{}, err
+	}
+	done := make(map[string]struct{}, len(state.Done))
+	for _, addr := range state.Done {
+		done[addr] = struct{}{}
+	}
+
+	var mu sync.Mutex
+	keys := make([]string, 0)
+	nextDone := append([]string(nil), state.Done...)
+	if err := cluster.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+		addr := node.Options().Addr
+		mu.Lock()
+		_, finished := done[addr]
+		current := state.Cursors[addr]
+		mu.Unlock()
+		if finished {
+			return nil
+		}
+
+		nodeKeys, next, scanErr := node.Scan(ctx, current, pattern, int64(count)).Result()
+		if scanErr != nil {
+			return scanErr
+		}
+		mu.Lock()
+		keys = append(keys, nodeKeys...)
+		if next != 0 {
+			state.Cursors[addr] = next
+		} else {
+			delete(state.Cursors, addr)
+			nextDone = append(nextDone, addr)
+		}
+		mu.Unlock()
+		return nil
+	}); err != nil {
+		return ScanResult{}, err
+	}
+
+	seen := make(map[string]struct{}, len(keys))
+	unique := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, key)
+	}
+
+	result := ScanResult{
+		Keys:    make([]KeyInfo, 0, len(unique)),
+		Cursor:  encodeClusterScanCursor(clusterScanState{Cursors: state.Cursors, Done: nextDone}),
+		HasMore: len(state.Cursors) > 0,
+	}
+	if len(unique) == 0 {
+		return result, nil
+	}
+	result.Keys = inspectKeys(ctx, cluster, unique)
+	return result, nil
+}
+
 // ScanKeys 使用 SCAN 游标增量读取 key，避免阻塞 Redis。
 func (s *RedisService) ScanKeys(id string, db int, cursor string, pattern string, count int) (ScanResult, error) {
 	entry, err := s.entry(id)
@@ -471,13 +669,6 @@ func (s *RedisService) ScanKeys(id string, db int, cursor string, pattern string
 		return ScanResult{}, err
 	}
 
-	cur := uint64(0)
-	if strings.TrimSpace(cursor) != "" {
-		cur, err = strconv.ParseUint(cursor, 10, 64)
-		if err != nil {
-			return ScanResult{}, newAppError("invalidCursor", "cursor", cursor)
-		}
-	}
 	if count <= 0 {
 		count = defaultScanCount
 	}
@@ -492,6 +683,17 @@ func (s *RedisService) ScanKeys(id string, db int, cursor string, pattern string
 	defer cancel()
 
 	client := entry.client(db)
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		return scanClusterKeys(ctx, cluster, cursor, pattern, count)
+	}
+
+	cur := uint64(0)
+	if strings.TrimSpace(cursor) != "" {
+		cur, err = strconv.ParseUint(cursor, 10, 64)
+		if err != nil {
+			return ScanResult{}, newAppError("invalidCursor", "cursor", cursor)
+		}
+	}
 	keys, next, err := client.Scan(ctx, cur, pattern, int64(count)).Result()
 	if err != nil {
 		return ScanResult{}, err
@@ -531,6 +733,35 @@ func (s *RedisService) ScanAllKeys(id string, db int, pattern string) (ScanResul
 	client := entry.client(db)
 	seen := make(map[string]struct{})
 	items := make([]KeyInfo, 0)
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		var mu sync.Mutex
+		if err := cluster.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+			var cursor uint64
+			for {
+				keys, next, scanErr := node.Scan(ctx, cursor, pattern, 1000).Result()
+				if scanErr != nil {
+					return scanErr
+				}
+				for _, item := range inspectKeys(ctx, node, keys) {
+					mu.Lock()
+					if _, duplicate := seen[item.Key]; !duplicate {
+						seen[item.Key] = struct{}{}
+						items = append(items, item)
+					}
+					mu.Unlock()
+				}
+				cursor = next
+				if cursor == 0 {
+					break
+				}
+			}
+			return nil
+		}); err != nil {
+			return ScanResult{}, err
+		}
+		return ScanResult{Keys: items, Cursor: "0", HasMore: false}, nil
+	}
+
 	var cursor uint64
 	for {
 		keys, next, scanErr := client.Scan(ctx, cursor, pattern, 1000).Result()
@@ -553,7 +784,7 @@ func (s *RedisService) ScanAllKeys(id string, db int, pattern string) (ScanResul
 	return ScanResult{Keys: items, Cursor: "0", HasMore: false}, nil
 }
 
-func inspectKeys(ctx context.Context, client *redis.Client, keys []string) []KeyInfo {
+func inspectKeys(ctx context.Context, client redis.UniversalClient, keys []string) []KeyInfo {
 	pipe := client.Pipeline()
 	typeCmds := make([]*redis.StatusCmd, len(keys))
 	ttlCmds := make([]*redis.Cmd, len(keys))
